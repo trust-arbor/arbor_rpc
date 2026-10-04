@@ -739,6 +739,52 @@ defmodule Arbor.RPC.SubprocessTest do
     assert {:closed, :input_chunk_too_large, ""} = FramedStream.next(handle, 500)
   end
 
+  test "close timeout stops the matching suspended actor and reaps its live child" do
+    handle = shell("exec sleep 30", cleanup_timeout: 200, term_grace: 50)
+    pid = Subprocess.os_pid(handle)
+    [actor] = Subprocess.linked_processes(handle)
+    monitor = Process.monitor(actor)
+    :ok = :sys.suspend(actor)
+
+    assert {:error, :timeout} = Subprocess.close(handle)
+    assert_receive {:DOWN, ^monitor, :process, ^actor, :killed}, 1_000
+    eventually(fn -> not alive?(pid) end)
+    assert Process.alive?(self())
+    assert :ok = Subprocess.close(handle)
+  end
+
+  test "stale generations and forged actor markers cannot stop another process" do
+    handle = shell("exec sleep 30", cleanup_timeout: 200, term_grace: 50)
+    [actor] = Subprocess.linked_processes(handle)
+    :ok = :sys.suspend(actor)
+
+    assert {:error, :stale_generation} = Subprocess.close(%{handle | generation: make_ref()})
+    assert Process.alive?(actor)
+
+    parent = self()
+    generation = Subprocess.identity(handle)
+
+    innocent =
+      spawn(fn ->
+        Process.put({Arbor.RPC.Subprocess.Actor, :generation}, generation)
+        Process.put(:"$initial_call", {Arbor.RPC.Subprocess.Actor, :init, 1})
+        send(parent, :forged_marker_ready)
+
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    on_exit(fn -> if Process.alive?(innocent), do: Process.exit(innocent, :kill) end)
+    assert_receive :forged_marker_ready
+    assert {:error, :invalid_handle} = Subprocess.close(%{handle | pid: innocent})
+    assert Process.alive?(innocent)
+    assert Process.alive?(actor)
+    assert :ok = :sys.resume(actor)
+    assert :ok = Subprocess.close(handle)
+    send(innocent, :stop)
+  end
+
   defp shell(script, opts \\ []) do
     assert {:ok, handle} = Subprocess.open(["/bin/sh", "-c", script], opts)
     on_exit(fn -> Subprocess.close(handle) end)

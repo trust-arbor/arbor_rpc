@@ -77,6 +77,33 @@ defmodule Arbor.RPC.Subprocess do
     end
   end
 
+  @doc """
+  Captures a finite command's output as original bytes and its exit status.
+
+  The capturing process owns the child, including when it dies before the
+  command finishes. `:timeout` is one monotonic read deadline (5,000 ms by
+  default), and `:max_output_bytes` bounds the complete output (1 MiB by
+  default). Newlines, CR, invalid UTF-8 and a final unfinished line are preserved.
+  Nonzero exit status returns `{:ok, output, status}` for caller interpretation.
+
+  Output or queue pressure, deadline expiry and cleanup failure return explicit
+  errors; truncated output is never reported as success. Startup and cleanup
+  use the existing subprocess budgets. Cleanup follows the read deadline and
+  can add its finite budget plus actor-call scheduling allowance. The usual
+  raw Port-driver mailbox limitation still applies. Child environment, working
+  directory, stderr redirection and group policy are the same as `open/2`.
+  `:owner` is always the capturing caller for this finite operation.
+
+  Byte overflow reports `:output_too_large`; count/mailbox pressure retains
+  `:queue_frame_limit` / `:mailbox_pressure`. Managed frame count remains bounded
+  even when output consists of many empty lines. Cleanup failure takes precedence
+  and includes the capture result's reason in `{:cleanup_failed, reason, cleanup}`.
+  If close is unconfirmed, capture force-stops only its own freshly opened
+  actor so its guardian attempts bounded cleanup, retaining the explicit error.
+  """
+  @spec capture([binary()], keyword()) :: {:ok, binary(), non_neg_integer()} | {:error, term()}
+  def capture(command, opts \\ []), do: Arbor.RPC.Subprocess.Capture.run(command, opts)
+
   @doc "A unique, opaque identity for this child generation."
   @spec identity(t()) :: reference()
   def identity(%__MODULE__{generation: generation}), do: generation
@@ -96,14 +123,69 @@ defmodule Arbor.RPC.Subprocess do
     :error, :badarg -> {:error, :invalid_iodata}
   end
 
-  @doc "Closes and cleans up the child within its finite budget; repeated close is safe."
+  @doc """
+  Closes the child within its finite budget; repeated close is safe.
+
+  A close timeout retains `{:error, :timeout}` and force-stops only the matching
+  local actor generation, letting its guardian attempt bounded cleanup. Actor
+  death does not confirm OS cleanup. Stale or forged handles cannot signal a
+  different process. The raw guardian ownership-proof limitations still apply.
+  """
   @spec close(t() | nil) :: :ok | {:error, term()}
   def close(nil), do: :ok
 
   def close(%__MODULE__{} = handle) do
-    case call(handle, :close) do
+    case validate_actor(handle) do
+      :ok -> close_actor(handle)
       {:error, :closed} -> :ok
-      result -> result
+      error -> error
+    end
+  end
+
+  defp close_actor(handle) do
+    case call(handle, :close) do
+      {:error, :timeout} = error ->
+        if validate_actor(handle) == :ok, do: Process.exit(handle.pid, :kill)
+        error
+
+      {:error, :closed} ->
+        :ok
+
+      result ->
+        result
+    end
+  end
+
+  defp validate_actor(%__MODULE__{pid: pid, generation: generation}) when is_pid(pid) do
+    if node(pid) == node() do
+      case Process.info(pid, [:initial_call, :dictionary]) do
+        nil ->
+          {:error, :closed}
+
+        [initial_call: {:proc_lib, :init_p, 5}, dictionary: dictionary] ->
+          validate_actor_dictionary(dictionary, generation)
+
+        _other_process ->
+          {:error, :invalid_handle}
+      end
+    else
+      {:error, :remote_handle_not_supported}
+    end
+  end
+
+  defp validate_actor(_handle), do: {:error, :invalid_handle}
+
+  defp validate_actor_dictionary(dictionary, generation) do
+    case List.keyfind(dictionary, :"$initial_call", 0) do
+      {:"$initial_call", {Actor, :init, 1}} ->
+        expected = {{Actor, :generation}, generation}
+
+        if List.keyfind(dictionary, {Actor, :generation}, 0) == expected,
+          do: :ok,
+          else: {:error, :stale_generation}
+
+      _ ->
+        {:error, :invalid_handle}
     end
   end
 

@@ -20,6 +20,9 @@ defmodule Arbor.RPC.Subprocess.Actor do
   @impl true
   def init({owner, generation, command, opts}) do
     Process.flag(:trap_exit, true)
+    # A facade can validate this specific actor without asking its mailbox,
+    # including when a close request times out while the actor is suspended.
+    Process.put({__MODULE__, :generation}, generation)
     owner_monitor = Process.monitor(owner)
 
     with {:ok, limits} <- limits(opts),

@@ -4,6 +4,21 @@ Shared JSON-RPC, framing and environment mechanics for Arbor protocols.
 
 Version 2.0.0-dev is an unpublished implementation snapshot.
 
+`Arbor.RPC.Subprocess.capture/2` runs a finite utility command and returns
+`{:ok, original_output_bytes, exit_status}`. The capturing caller owns its child.
+Defaults are one 5-second read deadline and 1 MiB of total output, including CR,
+LF, empty lines and unfinished EOF bytes. Nonzero status is returned for the
+caller to interpret. Byte overflow reports `:output_too_large`; frame-count and
+mailbox pressure remain explicit errors. Truncated output is never successful.
+Known cleanup failure includes the original result reason as
+`{:cleanup_failed, reason, cleanup_reason}`. Cleanup has a separate finite budget
+after read expiry; the actor-call allowance can add up to 1 second. This API uses
+the same PATH, environment, working-directory and optional group policy as
+`open/2`, and retains the raw Port-driver and platform limitations below.
+If close is unconfirmed, capture force-stops its exclusive actor and its guardian
+attempts bounded OS cleanup. The original cleanup error is retained; no success
+is inferred from fallback cleanup.
+
 `Arbor.RPC.Subprocess` opens a child with a stable Port owner, isolated environment,
 child PATH resolution, and finite TERM/KILL cleanup. The opening process owns the
 child's lifetime by default. A temporary connector can specify a live local
@@ -74,3 +89,13 @@ retaining its output pipe can delay that report. Windows cleanup and Unix/macOS/
 lifecycle matrix qualification remain release gates. ACP bridges, Pi managed
 sessions and native ACP child stdio adopt this API; each consuming package
 still requires its own release qualification.
+
+A close-call timeout keeps the explicit error and force-stops only an actor
+whose local process identity and private generation marker match the handle.
+This also prevents an abandoned actor from staying attached to a surviving
+client across reconnects. The guardian then attempts bounded cleanup. After
+hard actor death, that guardian has captured PID/group proof but no retained
+Port or actual `exit_status`; Actor DOWN alone does not confirm OS cleanup.
+Delayed PID reuse and guardian cleanup confirmation on this path remain release
+qualification gates. The live-actor retained-Port regression does not establish
+those properties for hard actor death.
