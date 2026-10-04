@@ -4,6 +4,8 @@ defmodule Arbor.RPC.FramedStream do
 
   `next/2` drains buffered frames before waiting. Its monotonic deadline and
   caller monitor prevent a timed-out or dead reader from taking a later frame.
+  `next_until/3` preserves one absolute deadline across protocol-filter retries;
+  an expired deadline never becomes a zero-time poll of buffered data.
   Handles, readers and subscribers must be local to the child actor's node.
   Pull readers and a push subscriber are mutually exclusive.
 
@@ -36,6 +38,50 @@ defmodule Arbor.RPC.FramedStream do
   end
 
   def next(_handle, _timeout), do: {:error, :invalid_timeout}
+
+  @doc """
+  Reads using an existing monotonic deadline in milliseconds, or `:infinity`.
+
+  Use the same deadline while filtering protocol noise. Once it expires,
+  buffered frames remain available for a subsequent read; the scheduling
+  allowance does not extend the frame deadline or enable zero-poll semantics.
+
+  For an explicit zero-time poll, pass its original monotonic cutoff and
+  `buffered_only: true` on every filter retry. Each attempt has a fresh finite
+  scheduling lease, but only frames buffered before that original cutoff may
+  be consumed. This option requires a finite cutoff.
+  """
+  @spec next_until(Subprocess.t(), integer() | :infinity, keyword()) ::
+          {:ok, binary()} | {:closed, term(), binary()} | {:error, term()}
+  def next_until(handle, deadline, opts \\ []) do
+    if is_list(opts) and Keyword.keyword?(opts) do
+      case Keyword.get(opts, :buffered_only, false) do
+        flag when is_boolean(flag) -> read_until(handle, deadline, flag)
+        _invalid -> {:error, :invalid_buffered_only}
+      end
+    else
+      {:error, :invalid_options}
+    end
+  end
+
+  defp read_until(handle, :infinity, false), do: next(handle, :infinity)
+
+  defp read_until(handle, cutoff, true) when is_integer(cutoff) do
+    acceptance = System.monotonic_time(:millisecond) + 10
+    Subprocess.call(handle, {:next, cutoff, acceptance, true}, 11)
+  end
+
+  defp read_until(handle, deadline, false) when is_integer(deadline) do
+    remaining = deadline - System.monotonic_time(:millisecond)
+
+    if remaining > 0 do
+      Subprocess.call(handle, {:next, deadline, deadline + 10, false}, remaining + 10)
+    else
+      {:error, :timeout}
+    end
+  end
+
+  defp read_until(_handle, _deadline, _buffered_only), do: {:error, :invalid_deadline}
 
   @spec subscribe(Subprocess.t(), pid(), keyword()) :: :ok | {:error, term()}
   def subscribe(handle, consumer, opts \\ []),

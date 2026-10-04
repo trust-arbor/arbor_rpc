@@ -177,6 +177,73 @@ defmodule Arbor.RPC.SubprocessTest do
     assert_receive {:DOWN, ^monitor, :process, ^actor, :normal}, 500
   end
 
+  test "an absolute filter deadline cannot turn into a fresh poll of queued frames" do
+    handle = shell("printf 'banner\\nlate\\n'; sleep 1")
+    eventually(fn -> Subprocess.stats(handle).frames == 2 end)
+    deadline = System.monotonic_time(:millisecond) + 200
+    assert {:ok, "banner"} = FramedStream.next_until(handle, deadline)
+    Process.sleep(220)
+    assert {:error, :timeout} = FramedStream.next_until(handle, deadline)
+    assert %{frames: 1} = Subprocess.stats(handle)
+    assert {:ok, "late"} = FramedStream.next(handle, 0)
+    assert {:error, :invalid_deadline} = FramedStream.next_until(handle, :invalid)
+  end
+
+  test "actor scheduling past an absolute deadline leaves prebuffered output available" do
+    handle = shell("printf 'buffered\\n'; sleep 1")
+    eventually(fn -> Subprocess.stats(handle).frames == 1 end)
+    actor = hd(Subprocess.linked_processes(handle))
+    :erlang.suspend_process(actor)
+    parent = self()
+    deadline = System.monotonic_time(:millisecond) + 50
+
+    reader =
+      spawn(fn ->
+        send(parent, {:absolute_result, FramedStream.next_until(handle, deadline)})
+
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    on_exit(fn ->
+      try do
+        :erlang.resume_process(actor)
+      catch
+        :error, :badarg -> :ok
+      end
+
+      Process.exit(reader, :kill)
+    end)
+
+    assert_receive {:absolute_result, {:error, :timeout}}, 150
+    assert Process.alive?(reader)
+    :erlang.resume_process(actor)
+    assert %{frames: 1} = Subprocess.stats(handle)
+    assert {:ok, "buffered"} = FramedStream.next_until(handle, :infinity)
+  end
+
+  test "filtering an original zero poll excludes frames buffered after its cutoff" do
+    handle = shell("read first; printf 'banner\\n'; read second; printf 'later\\n'; sleep 1")
+    assert :ok = Subprocess.write(handle, "first\n")
+    eventually(fn -> Subprocess.stats(handle).frames == 1 end)
+    cutoff = System.monotonic_time(:millisecond)
+    Process.sleep(20)
+    assert :ok = Subprocess.write(handle, "second\n")
+    eventually(fn -> Subprocess.stats(handle).frames == 2 end)
+
+    assert {:ok, "banner"} = FramedStream.next_until(handle, cutoff, buffered_only: true)
+    assert {:error, :timeout} = FramedStream.next_until(handle, cutoff, buffered_only: true)
+    assert %{frames: 1} = Subprocess.stats(handle)
+    assert {:ok, "later"} = FramedStream.next(handle, 0)
+
+    assert {:error, :invalid_deadline} =
+             FramedStream.next_until(handle, :infinity, buffered_only: true)
+
+    assert {:error, :invalid_buffered_only} =
+             FramedStream.next_until(handle, cutoff, buffered_only: :yes)
+  end
+
   test "an expired nonblocking poll cannot steal a prebuffered frame" do
     handle = shell("printf 'buffered\\n'; sleep 1")
     eventually(fn -> Subprocess.stats(handle).frames == 1 end)
