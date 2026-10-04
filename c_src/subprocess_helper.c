@@ -294,6 +294,14 @@ static unsigned parse_ms(const char *s) {
   if (!*s || *end || n > 60000) { fprintf(stderr, "invalid duration\n"); exit(2); }
   return (unsigned)n;
 }
+static void child_status(int fd, int status) {
+  ssize_t written;
+  do { written = write(fd, &status, sizeof(status)); }
+  while (written < 0 && errno == EINTR);
+  /* Setup reports are atomic pipe writes. A missing/partial report must not
+   * let the vendor execute after the parent failed to establish ownership. */
+  if (written != sizeof(status)) _exit(127);
+}
 int main(int argc, char **argv) {
   if (argc < 12 || strcmp(argv[1], "1") != 0 || strcmp(argv[10], "--") != 0) {
     fprintf(stderr, "invalid Arbor RPC helper protocol or startup arguments\n"); return 2;
@@ -329,13 +337,13 @@ int main(int argc, char **argv) {
     sa.sa_handler = SIG_DFL; sigaction(SIGPIPE, &sa, NULL);
     if (setsid() < 0 || dup2(in[0], 0) < 0 || dup2(out[1], 1) < 0 ||
         (b.merge_stderr && dup2(out[1], 2) < 0)) {
-      int error = errno; (void)write(exec_ack[1], &error, sizeof(error)); _exit(127);
+      int error = errno; child_status(exec_ack[1], error); _exit(127);
     }
     close(in[0]); close(out[1]);
     /* This trusted setup marker precedes exec, keeping fast exits identifiable. */
-    int ready = 0; (void)write(exec_ack[1], &ready, sizeof(ready));
+    child_status(exec_ack[1], 0);
     execve(argv[11], &argv[11], environ);
-    int error = errno; (void)write(exec_ack[1], &error, sizeof(error)); _exit(127);
+    int error = errno; child_status(exec_ack[1], error); _exit(127);
   }
   b.owns = true; close(in[0]); close(out[1]); close(exec_ack[1]);
   b.child_in = in[1]; b.child_out = out[0];
