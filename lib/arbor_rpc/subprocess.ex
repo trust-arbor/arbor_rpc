@@ -15,8 +15,12 @@ defmodule Arbor.RPC.Subprocess do
   An oversized frame, input chunk or queue closes the child with an explicit
   error. One native raw-data credit bounds data delivered to the actor before
   framed admission; terminal/control packets have separately reserved capacity.
-  These managed bounds do not include kernel buffers, Port-driver allocation,
-  caller write concurrency or bytes an application retains after acknowledging.
+  Supported writes additionally reserve count and byte credit before retaining
+  detached payloads in the Actor-owned ledger. A coalesced wake carries no
+  payload to the Actor mailbox. These managed bounds do not include kernel
+  buffers, Port-driver allocation, caller-owned inputs or bytes an application
+  retains after acknowledging. One bounded native command packet and the
+  helper's bounded stdin queue are separate from pending ledger credit.
   A consumer must acknowledge after processing rather than forwarding to an
   unbounded mailbox.
 
@@ -25,6 +29,8 @@ defmodule Arbor.RPC.Subprocess do
   `:max_frame_bytes` (1 MiB), `:max_queue_bytes` (4 MiB), `:max_queue_frames`
   (1024), `:max_waiters` (128), `:max_input_chunk_bytes` (4 MiB),
   `:max_mailbox_messages` (1024), `:max_write_bytes` (1 MiB),
+  `:max_pending_writes` (64), `:max_pending_write_bytes` (4 MiB, including
+  reservation metadata),
   `:cleanup_timeout` (500 ms), `:term_grace` (100 ms) and `:closed_retention`
   (5 seconds). Cleanup requires at least 50 ms beyond TERM grace for KILL.
   Explicit close stops the actor. Natural exit or pressure failure drains
@@ -48,7 +54,7 @@ defmodule Arbor.RPC.Subprocess do
   helper hard death and uninterruptible child exit remain release gates.
   """
 
-  alias Arbor.RPC.Subprocess.{Actor, Guardian, Receipt}
+  alias Arbor.RPC.Subprocess.{Actor, Guardian, Receipt, WriteAdmission}
 
   @enforce_keys [:pid, :guardian, :generation, :cleanup_timeout, :max_write_bytes]
   defstruct [:pid, :guardian, :generation, :cleanup_timeout, :max_write_bytes]
@@ -140,20 +146,28 @@ defmodule Arbor.RPC.Subprocess do
   @spec identity(t()) :: reference()
   def identity(%__MODULE__{generation: generation}), do: generation
 
-  @doc "Admits a bounded write without suspending on a busy native stdin queue."
-  @spec write(t(), iodata()) :: :ok | {:error, term()}
-  def write(%__MODULE__{max_write_bytes: limit} = handle, data) do
-    case admit_write(data, limit) do
-      :ok -> call(handle, {:write, data})
-      {:error, _reason} = error -> error
-    end
-  end
+  @doc """
+  Admits a bounded write without suspending on a busy native stdin queue.
 
-  defp admit_write(data, limit) do
-    if :erlang.iolist_size(data) <= limit, do: :ok, else: {:error, :write_too_large}
-  catch
-    :error, :badarg -> {:error, :invalid_iodata}
-  end
+  Count/byte exhaustion or finite ledger contention returns `{:error, :backpressure}`.
+  The per-write byte cap uses the Actor's immutable configuration; admitted
+  iodata is detached before owner retention. The default original call deadline
+  is `cleanup_timeout + 1000` ms and covers validation, admission, queueing and
+  native submission. An expired or dead producer cannot initiate a new write.
+  A result queued while a caller is suspended past that cutoff returns timeout.
+
+  Caller timeout/death releases work proven not to have started. A started or
+  uncertain physical write stays charged until a conclusive native ACK or
+  proven pre-command rejection, or until the Actor's ETS owner dies. `:ok`
+  confirms bounded native helper admission, not consumption by the child;
+  accepted bytes can reach stdin after the caller returns. Actor death releases
+  BEAM retention and does not certify OS cleanup: use `cleanup_receipt/1`.
+  Raw Erlang messages and direct calls to the private Actor are outside this
+  supported admission boundary. Input traversal/materialization and ETS work
+  are synchronous cooperative work, not a hard CPU/RSS scheduling guarantee.
+  """
+  @spec write(t(), iodata()) :: :ok | {:error, term()}
+  def write(%__MODULE__{} = handle, data), do: call(handle, {:write, data})
 
   @doc """
   Closes the child within its finite budget; repeated close is safe.
@@ -280,10 +294,25 @@ defmodule Arbor.RPC.Subprocess do
   def stats(handle), do: call(handle, :stats)
 
   @doc false
+  @spec call(t(), term(), timeout() | nil) :: term()
+  def call(handle, request, timeout \\ nil)
+
+  def call(%__MODULE__{cleanup_timeout: budget} = handle, {:write, data}, timeout) do
+    timeout = if is_nil(timeout), do: budget + 1000, else: timeout
+
+    deadline =
+      if timeout == :infinity, do: :infinity, else: System.monotonic_time(:millisecond) + timeout
+
+    with :ok <- validate_actor(handle),
+         {:ok, table} <- write_table(handle) do
+      WriteAdmission.submit(table, handle.pid, handle.generation, data, deadline)
+    end
+  end
+
   def call(
         %__MODULE__{pid: pid, generation: generation, cleanup_timeout: budget},
         request,
-        timeout \\ nil
+        timeout
       ) do
     timeout = if is_nil(timeout), do: budget + 1000, else: timeout
 
@@ -293,5 +322,18 @@ defmodule Arbor.RPC.Subprocess do
   catch
     :exit, {:timeout, _} -> {:error, :timeout}
     :exit, _ -> {:error, :closed}
+  end
+
+  defp write_table(handle) do
+    case Process.info(handle.pid, :dictionary) do
+      {:dictionary, dictionary} ->
+        case List.keyfind(dictionary, {Actor, :writes}, 0) do
+          {{Actor, :writes}, table} -> {:ok, table}
+          _ -> {:error, :closed}
+        end
+
+      nil ->
+        {:error, :closed}
+    end
   end
 end

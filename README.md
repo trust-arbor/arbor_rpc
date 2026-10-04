@@ -64,15 +64,39 @@ EOF/final bytes, cleanup receipt and helper exit are separate events. Oversized
 frames, input chunks and queues retain their explicit errors and accepted prefix
 frames. An abandoned drain expires after `:closed_retention` (5 seconds).
 
-Normal facade writes are validated before Actor mailbox entry; the Actor also
-checks its immutable configured cap/iodata before the native Port. Arbitrary raw
-same-VM sends remain outside managed mailbox bounds. Writes are then acknowledged by the native
-parent's finite stdin admission queue. Busy queues return `:backpressure`; an
-accepted write does not promise the vendor consumed it. Callers must bound
-concurrent writes. Kernel pipes, OTP Port-driver allocation, arbitrary caller
-mailboxes and application-retained bytes are outside managed queue counters.
-The native write/control pressure and total-memory limits require measurement;
-these counters are not a hard global memory bound.
+Supported writes reserve aggregate count/byte credit before owner retention or
+mailbox entry. Defaults are `max_pending_writes: 64` and
+`max_pending_write_bytes: 4_194_304`, including reservation metadata, alongside
+`max_write_bytes: 1_048_576` per write. Valid iodata is detached after the logical
+size check; small subbinaries cannot retain large backing binaries in the
+ledger. A coalesced payload-free wake and one maintenance timer replace
+per-caller payload messages. Busy capacity or finite CAS contention returns
+`{:error, :backpressure}`. The Actor's immutable configuration also applies to
+`Subprocess.call(handle, {:write, data}, timeout)`; forged facade limits cannot
+raise it. Arbitrary raw same-VM sends/private Actor calls remain outside this
+supported mailbox boundary.
+
+Normal writes use one original `cleanup_timeout + 1000` ms call cutoff through
+validation, admission, queueing and the final native command check. Queued work
+cannot execute after deadline or producer death. A caller suspended through a
+queued success gets timeout and no late alias replies. Hidden `call/3` retains
+its explicit `:infinity` host opt-in, outside the finite managed-call guarantee;
+aggregate credit still bounds retention, and the nested native admission
+attempt remains finite.
+
+Timeout or caller death releases only work proven not to have started. Once a
+write starts, uncertainty remains charged until an actual native ACK or proven
+pre-command rejection. An authoritative later ACK can release a timed-out
+caller's credit; it cannot make that caller's timeout become success. Actor
+DOWN destroys only its BEAM ledger. The existing retained Guardian receipt is
+required to certify owned child/group cleanup. Native `:ok` confirms bounded
+helper stdin admission, not vendor consumption: admitted bytes can reach stdin
+later. The separate single native command packet and helper stdin queue are
+bounded by the per-write cap. Kernel pipes, OTP Port-driver allocation,
+caller-owned input/mailboxes and application-retained output are outside these
+counters. Iodata traversal/materialization and whole-row ETS CAS work are
+cooperative, not a hard per-call CPU/RSS guarantee. Broader platform, blocked
+write/reaping and total-memory measurement remain release gates.
 
 ## Finite utilities
 

@@ -2,7 +2,7 @@ defmodule Arbor.RPC.Subprocess.Actor do
   @moduledoc false
   use GenServer
   alias Arbor.RPC.Framing
-  alias Arbor.RPC.Subprocess.{Command, Guardian}
+  alias Arbor.RPC.Subprocess.{Command, Guardian, WriteAdmission}
 
   @defaults [
     max_frame_bytes: 1_048_576,
@@ -12,6 +12,8 @@ defmodule Arbor.RPC.Subprocess.Actor do
     max_input_chunk_bytes: 4_194_304,
     max_mailbox_messages: 1024,
     max_write_bytes: 1_048_576,
+    max_pending_writes: 64,
+    max_pending_write_bytes: 4_194_304,
     cleanup_timeout: 500,
     term_grace: 100,
     closed_retention: 5000,
@@ -34,9 +36,13 @@ defmodule Arbor.RPC.Subprocess.Actor do
          {:ok, guardian} <- Guardian.start(owner, self(), generation, command, opts, limits),
          {:ok, proof} <- Guardian.proof(guardian, generation) do
       Process.put({__MODULE__, :guardian}, guardian)
+      writes = WriteAdmission.new(generation, limits)
+      Process.put({__MODULE__, :writes}, writes)
+      Process.send_after(self(), :maintain_writes, 25)
 
       {:ok,
        %{
+         writes: writes,
          owner: owner,
          owner_monitor: owner_monitor,
          generation: generation,
@@ -115,14 +121,14 @@ defmodule Arbor.RPC.Subprocess.Actor do
 
   def handle_call({_generation, :stats}, _from, state) do
     {:reply,
-     %{
+     Map.merge(WriteAdmission.stats(state.writes), %{
        frames: state.count,
        bytes: state.bytes,
        queued: :queue.len(state.queue),
        inflight: map_size(state.inflight),
        waiters: state.waiter_count,
        closed: state.closed != nil
-     }, state}
+     }), state}
   end
 
   def handle_call({_generation, :connected?}, _from, state),
@@ -163,10 +169,7 @@ defmodule Arbor.RPC.Subprocess.Actor do
 
   def handle_call({_generation, {:next, deadline, acceptance_deadline, immediate}}, from, state) do
     cond do
-      acceptance_deadline != :infinity and now() >= acceptance_deadline ->
-        {:reply, {:error, :timeout}, state}
-
-      deadline != :infinity and not immediate and now() >= deadline ->
+      reader_expired?(deadline, acceptance_deadline, immediate) ->
         {:reply, {:error, :timeout}, state}
 
       state.closed != nil and :queue.is_empty(state.queue) ->
@@ -248,6 +251,17 @@ defmodule Arbor.RPC.Subprocess.Actor do
   end
 
   @impl true
+  def handle_info(:drain_writes, state) do
+    drain_writes(state)
+    noreply(state)
+  end
+
+  def handle_info(:maintain_writes, state) do
+    drain_writes(state, false)
+    Process.send_after(self(), :maintain_writes, 25)
+    noreply(state)
+  end
+
   def handle_info(
         {:arbor_rpc_native, guardian, generation, {:chunk, sequence, data}},
         %{guardian: guardian, generation: generation, closed: nil} = state
@@ -310,6 +324,25 @@ defmodule Arbor.RPC.Subprocess.Actor do
     do: noreply(remove_waiters(state, &(&1.monitor == monitor), nil))
 
   def handle_info(_message, state), do: {:noreply, state}
+
+  defp reader_expired?(deadline, acceptance_deadline, immediate) do
+    (acceptance_deadline != :infinity and now() >= acceptance_deadline) or
+      (deadline != :infinity and not immediate and now() >= deadline)
+  end
+
+  defp drain_writes(state, consume_wake \\ true) do
+    WriteAdmission.drain(
+      state.writes,
+      fn data, deadline, context ->
+        if state.closed do
+          {:error, :closed}
+        else
+          Guardian.write_admitted(state.guardian, state.generation, data, deadline, context)
+        end
+      end,
+      consume_wake
+    )
+  end
 
   defp validate_write(data, limit) do
     if :erlang.iolist_size(data) <= limit, do: :ok, else: {:error, :write_too_large}
@@ -444,6 +477,7 @@ defmodule Arbor.RPC.Subprocess.Actor do
   defp close(%{closed: closed} = state, _reason, _kind) when closed != nil, do: state
 
   defp close(state, reason, _kind) do
+    WriteAdmission.seal(state.writes)
     result = Guardian.close(state.guardian, state.generation, state.limits.cleanup_timeout + 200)
     reason = if result == :ok, do: reason, else: {:cleanup_failed, reason, result}
     Process.send_after(self(), :closed_timeout, state.limits.closed_retention)

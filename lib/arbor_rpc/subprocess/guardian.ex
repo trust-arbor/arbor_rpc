@@ -2,7 +2,7 @@ defmodule Arbor.RPC.Subprocess.Guardian do
   @moduledoc false
   use GenServer
 
-  alias Arbor.RPC.Subprocess.{NativeBackend, NativeProtocol, Receipt}
+  alias Arbor.RPC.Subprocess.{NativeBackend, NativeProtocol, Receipt, WriteAdmission}
 
   def start(owner, actor, generation, command, opts, limits) do
     GenServer.start(__MODULE__, {owner, actor, generation, command, opts, limits},
@@ -13,7 +13,18 @@ defmodule Arbor.RPC.Subprocess.Guardian do
   def close(pid, generation, timeout), do: call(pid, generation, :close, timeout)
   def proof(pid, generation), do: call(pid, generation, :proof, 500)
   def receipt(pid, generation, timeout), do: call(pid, generation, :receipt, timeout)
-  def write(pid, generation, data, timeout), do: call(pid, generation, {:write, data}, timeout)
+
+  def write(pid, generation, data, timeout) do
+    case call(pid, generation, {:write, data, now() + timeout, nil}, timeout) do
+      {:uncertain, result} -> result
+      result -> result
+    end
+  end
+
+  def write_admitted(pid, generation, data, deadline, context) do
+    timeout = if deadline == :infinity, do: 1100, else: min(1100, max(0, deadline - now()))
+    call(pid, generation, {:write, data, deadline, context}, timeout)
+  end
 
   def ack(pid, generation, sequence),
     do: GenServer.cast(pid, {generation, self(), {:ack, sequence}})
@@ -141,25 +152,37 @@ defmodule Arbor.RPC.Subprocess.Guardian do
     end
   end
 
-  def handle_call({_generation, {:write, data}}, {caller, _tag} = from, state) do
+  def handle_call({_generation, {:write, data, deadline, context}}, {caller, _tag} = from, state) do
     cond do
       caller != state.actor ->
         {:reply, {:error, :invalid_write_owner}, state}
 
       state.closing or state.write != nil or state.vendor_status != nil ->
+        WriteAdmission.complete(context, {:error, :closed})
         {:reply, {:error, :closed}, state}
 
       true ->
         sequence = state.write_sequence + 1
         packet = NativeProtocol.command(:write, state.token, sequence, IO.iodata_to_binary(data))
 
-        case NativeBackend.command(state.port, packet) do
-          :ok ->
-            timer = Process.send_after(self(), {:write_timeout, sequence}, 1000)
-            {:noreply, %{state | write_sequence: sequence, write: {sequence, from, timer}}}
+        # Materialization and scheduling both spend the original caller budget.
+        # A queued Guardian request may never initiate a late physical write.
+        if not WriteAdmission.current?(context, deadline) do
+          WriteAdmission.complete(context, {:error, :timeout})
+          {:reply, {:error, :timeout}, state}
+        else
+          case NativeBackend.command(state.port, packet) do
+            :ok ->
+              wait = if deadline == :infinity, do: 1000, else: min(1000, max(0, deadline - now()))
+              timer = Process.send_after(self(), {:write_timeout, sequence}, wait)
 
-          error ->
-            {:reply, error, state}
+              {:noreply,
+               %{state | write_sequence: sequence, write: {sequence, from, timer, context}}}
+
+            error ->
+              WriteAdmission.complete(context, error)
+              {:reply, error, state}
+          end
         end
     end
   end
@@ -222,8 +245,9 @@ defmodule Arbor.RPC.Subprocess.Guardian do
     {:noreply, terminal(state)}
   end
 
-  def handle_info({:write_timeout, sequence}, %{write: {sequence, from, _timer}} = state) do
-    GenServer.reply(from, {:error, :write_admission_timeout})
+  def handle_info({:write_timeout, sequence}, %{write: {sequence, from, _timer, context}} = state) do
+    WriteAdmission.uncertain(context, {:error, :write_admission_timeout})
+    GenServer.reply(from, {:uncertain, {:error, :write_admission_timeout}})
     {:noreply, begin_cleanup(%{state | write: nil})}
   end
 
@@ -260,8 +284,12 @@ defmodule Arbor.RPC.Subprocess.Guardian do
 
   defp event(:stdout_eof, state), do: %{state | stdout_eof: true}
 
-  defp event({:write_result, sequence, result}, %{write: {sequence, from, timer}} = state) do
+  defp event(
+         {:write_result, sequence, result},
+         %{write: {sequence, from, timer, context}} = state
+       ) do
     Process.cancel_timer(timer)
+    WriteAdmission.complete(context, result)
     GenServer.reply(from, result)
     %{state | write: nil}
   end
@@ -322,9 +350,10 @@ defmodule Arbor.RPC.Subprocess.Guardian do
 
   defp finish_write(%{write: nil} = state, _result), do: state
 
-  defp finish_write(%{write: {_sequence, from, timer}} = state, result) do
+  defp finish_write(%{write: {_sequence, from, timer, context}} = state, result) do
     Process.cancel_timer(timer)
-    GenServer.reply(from, result)
+    WriteAdmission.uncertain(context, result)
+    GenServer.reply(from, {:uncertain, result})
     %{state | write: nil}
   end
 
@@ -362,4 +391,6 @@ defmodule Arbor.RPC.Subprocess.Guardian do
     NativeBackend.close(state.port)
     :ok
   end
+
+  defp now, do: System.monotonic_time(:millisecond)
 end
