@@ -2,7 +2,8 @@ defmodule Arbor.RPC.Subprocess do
   @moduledoc """
   An owned child process with bounded newline delivery and finite cleanup.
 
-  A stable actor owns the Port and monitors the lifetime owner, which defaults
+  A stable actor frames output; a guardian owns the native helper Port and monitors
+  the lifetime owner, which defaults
   to the process that called `open/2`. An explicit live local `:owner` PID lets
   a temporary connection task open the child on behalf of a long-lived client.
   Passing the opaque handle to a handshake task does not transfer ownership of
@@ -12,12 +13,12 @@ defmodule Arbor.RPC.Subprocess do
   `Arbor.RPC.FramedStream` provides pull delivery or acknowledged push delivery.
   The configured frame count and bytes include queued and unacknowledged frames.
   An oversized frame, input chunk or queue closes the child with an explicit
-  error. Credit bounds the subscriber's frame messages. OTP Port input has no
-  read-credit API: driver messages may transiently accumulate in the actor's
-  mailbox before its high-water check runs. These counters are not a hard bound
-  on that raw driver mailbox or on the bytes retained by an application after
-  acknowledging a frame. A consumer must acknowledge after processing a frame,
-  rather than after forwarding it to another unbounded mailbox.
+  error. One native raw-data credit bounds data delivered to the actor before
+  framed admission; terminal/control packets have separately reserved capacity.
+  These managed bounds do not include kernel buffers, Port-driver allocation,
+  caller write concurrency or bytes an application retains after acknowledging.
+  A consumer must acknowledge after processing rather than forwarding to an
+  unbounded mailbox.
 
   Options include `:owner`, `:cd`, `:env`, `:environment_policy` (default `:isolated`),
   `:process_group` (default `false`), `:stderr_to_stdout` (default `false`),
@@ -26,24 +27,35 @@ defmodule Arbor.RPC.Subprocess do
   `:max_mailbox_messages` (1024), `:max_write_bytes` (1 MiB),
   `:cleanup_timeout` (500 ms), `:term_grace` (100 ms) and `:closed_retention`
   (5 seconds). Cleanup requires at least 50 ms beyond TERM grace for KILL.
-  Explicit close stops the actor. On natural exit or pressure failure, the
-  actor stops after terminal delivery; unused buffered frames expire after
-  `:closed_retention` with an explicit drain-timeout closure. Group cleanup is
-  accepted on Unix only after verifying the owned child is its group leader.
-  The Port retains PID metadata after EOF; actual `exit_status`, rather than
-  EOF alone, proves direct-child death. A group leader that exits before group
-  ownership can be measured is rejected with `:child_not_process_group_leader`.
-  No command replay or unverified group signalling occurs.
-  Windows tree cleanup requires platform qualification before a release.
+  Explicit close stops the actor. Natural exit or pressure failure drains
+  admitted frames until terminal delivery or `:closed_retention`. The guardian
+  retains a typed cleanup receipt for `:receipt_retention` (5 seconds), then
+  stops; receipt loss or expiry returns an explicit unavailable error.
+
+  The source-built native parent retains its actual child unreaped until all
+  future signalling is disabled. It signals only that owned child or its
+  verified private group, then reaps and polls group existence without signals.
+  Group absence is an observation of the targeted group, not containment of an
+  arbitrary descendant tree. Escaped descendants are outside this contract.
+  Actual vendor status, final output/EOF and helper status remain distinct.
+  Helper/guardian loss cannot confirm cleanup. Numeric PID diagnostics are not
+  signalling authority; retired unmanaged cleanup is unsupported.
+
+  The draft requires a build-time C compiler on supported Unix platforms, no
+  runtime compiler or NIF. Missing helper and unsupported platform errors have
+  no numeric signalling fallback. Installed/release lookup uses `:code.priv_dir`.
+  Linux/macOS lifecycle and pressure qualification, Windows handle/Job support,
+  helper hard death and uninterruptible child exit remain release gates.
   """
 
-  alias Arbor.RPC.Subprocess.Actor
+  alias Arbor.RPC.Subprocess.{Actor, Guardian, Receipt}
 
-  @enforce_keys [:pid, :generation, :cleanup_timeout, :max_write_bytes]
-  defstruct [:pid, :generation, :cleanup_timeout, :max_write_bytes]
+  @enforce_keys [:pid, :guardian, :generation, :cleanup_timeout, :max_write_bytes]
+  defstruct [:pid, :guardian, :generation, :cleanup_timeout, :max_write_bytes]
 
   @opaque t :: %__MODULE__{
             pid: pid(),
+            guardian: pid(),
             generation: reference(),
             cleanup_timeout: pos_integer(),
             max_write_bytes: pos_integer()
@@ -62,19 +74,40 @@ defmodule Arbor.RPC.Subprocess do
   end
 
   defp start(owner, generation, command, opts) do
-    case GenServer.start(Actor, {owner, generation, command, opts}) do
+    case GenServer.start(Actor, {owner, generation, command, opts}, timeout: startup_budget(opts)) do
       {:ok, pid} ->
-        {:ok,
-         %__MODULE__{
-           pid: pid,
-           generation: generation,
-           cleanup_timeout: Keyword.get(opts, :cleanup_timeout, 500),
-           max_write_bytes: Keyword.get(opts, :max_write_bytes, 1_048_576)
-         }}
+        case Process.info(pid, :dictionary) do
+          {:dictionary, dictionary} ->
+            case List.keyfind(dictionary, {Actor, :guardian}, 0) do
+              {{Actor, :guardian}, guardian} when is_pid(guardian) ->
+                {:ok,
+                 %__MODULE__{
+                   pid: pid,
+                   guardian: guardian,
+                   generation: generation,
+                   cleanup_timeout: Keyword.get(opts, :cleanup_timeout, 500),
+                   max_write_bytes: Keyword.get(opts, :max_write_bytes, 1_048_576)
+                 }}
+
+              _ ->
+                {:error, :closed_during_startup}
+            end
+
+          nil ->
+            {:error, :closed_during_startup}
+        end
 
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp startup_budget(opts) do
+    Enum.reduce([{:startup_timeout, 1000}, {:cleanup_timeout, 500}], 1000, fn {key, default},
+                                                                              total ->
+      value = Keyword.get(opts, key, default)
+      total + if(is_integer(value) and value in 1..60_000, do: value, else: default)
+    end)
   end
 
   @doc """
@@ -89,8 +122,7 @@ defmodule Arbor.RPC.Subprocess do
   Output or queue pressure, deadline expiry and cleanup failure return explicit
   errors; truncated output is never reported as success. Startup and cleanup
   use the existing subprocess budgets. Cleanup follows the read deadline and
-  can add its finite budget plus actor-call scheduling allowance. The usual
-  raw Port-driver mailbox limitation still applies. Child environment, working
+  can add its finite budget plus actor-call scheduling allowance. Kernel and Port-driver allocation remain outside managed queue counters. Child environment, working
   directory, stderr redirection and group policy are the same as `open/2`.
   `:owner` is always the capturing caller for this finite operation.
 
@@ -108,7 +140,7 @@ defmodule Arbor.RPC.Subprocess do
   @spec identity(t()) :: reference()
   def identity(%__MODULE__{generation: generation}), do: generation
 
-  @doc "Writes bytes without suspension when the Port output queue is busy."
+  @doc "Admits a bounded write without suspending on a busy native stdin queue."
   @spec write(t(), iodata()) :: :ok | {:error, term()}
   def write(%__MODULE__{max_write_bytes: limit} = handle, data) do
     case admit_write(data, limit) do
@@ -129,7 +161,7 @@ defmodule Arbor.RPC.Subprocess do
   A close timeout retains `{:error, :timeout}` and force-stops only the matching
   local actor generation, letting its guardian attempt bounded cleanup. Actor
   death does not confirm OS cleanup. Stale or forged handles cannot signal a
-  different process. The raw guardian ownership-proof limitations still apply.
+  different process. An available typed guardian receipt, rather than Actor death, confirms cleanup.
   """
   @spec close(t() | nil) :: :ok | {:error, term()}
   def close(nil), do: :ok
@@ -137,7 +169,7 @@ defmodule Arbor.RPC.Subprocess do
   def close(%__MODULE__{} = handle) do
     case validate_actor(handle) do
       :ok -> close_actor(handle)
-      {:error, :closed} -> :ok
+      {:error, :closed} -> close_guardian(handle)
       error -> error
     end
   end
@@ -149,12 +181,50 @@ defmodule Arbor.RPC.Subprocess do
         error
 
       {:error, :closed} ->
-        :ok
+        close_guardian(handle)
 
       result ->
         result
     end
   end
+
+  @doc "Returns the retained typed cleanup receipt, or an explicit pending/unavailable error."
+  @spec cleanup_receipt(t()) :: {:ok, Receipt.t()} | {:error, term()}
+  def cleanup_receipt(%__MODULE__{} = handle) do
+    with :ok <- validate_guardian(handle) do
+      Guardian.receipt(handle.guardian, handle.generation, handle.cleanup_timeout + 200)
+    end
+  end
+
+  defp close_guardian(handle) do
+    with :ok <- validate_guardian(handle) do
+      Guardian.close(handle.guardian, handle.generation, handle.cleanup_timeout + 200)
+    end
+  end
+
+  defp validate_guardian(%__MODULE__{guardian: pid, generation: generation}) when is_pid(pid) do
+    if node(pid) == node() do
+      case Process.info(pid, [:initial_call, :dictionary]) do
+        nil ->
+          {:error, :cleanup_status_unavailable}
+
+        [initial_call: {:proc_lib, :init_p, 5}, dictionary: dictionary] ->
+          if List.keyfind(dictionary, :"$initial_call", 0) ==
+               {:"$initial_call", {Guardian, :init, 1}} and
+               List.keyfind(dictionary, {Guardian, :generation}, 0) ==
+                 {{Guardian, :generation}, generation},
+             do: :ok,
+             else: {:error, :invalid_guardian_identity}
+
+        _ ->
+          {:error, :invalid_guardian_identity}
+      end
+    else
+      {:error, :remote_handle_not_supported}
+    end
+  end
+
+  defp validate_guardian(_handle), do: {:error, :invalid_guardian_identity}
 
   defp validate_actor(%__MODULE__{pid: pid, generation: generation}) when is_pid(pid) do
     if node(pid) == node() do

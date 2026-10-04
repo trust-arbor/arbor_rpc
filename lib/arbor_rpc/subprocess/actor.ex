@@ -1,8 +1,8 @@
 defmodule Arbor.RPC.Subprocess.Actor do
   @moduledoc false
   use GenServer
-  alias Arbor.RPC.{Framing, PortEnvironment}
-  alias Arbor.RPC.Subprocess.{Cleanup, Command}
+  alias Arbor.RPC.Framing
+  alias Arbor.RPC.Subprocess.{Command, Guardian}
 
   @defaults [
     max_frame_bytes: 1_048_576,
@@ -14,7 +14,9 @@ defmodule Arbor.RPC.Subprocess.Actor do
     max_write_bytes: 1_048_576,
     cleanup_timeout: 500,
     term_grace: 100,
-    closed_retention: 5000
+    closed_retention: 5000,
+    receipt_retention: 5000,
+    startup_timeout: 1000
   ]
 
   @impl true
@@ -23,21 +25,24 @@ defmodule Arbor.RPC.Subprocess.Actor do
     # A facade can validate this specific actor without asking its mailbox,
     # including when a close request times out while the actor is suspended.
     Process.put({__MODULE__, :generation}, generation)
+    Process.put({__MODULE__, :owner}, owner)
     owner_monitor = Process.monitor(owner)
 
     with {:ok, limits} <- limits(opts),
          :ok <- boolean_options(opts),
          {:ok, command} <- Command.resolve(command, opts),
-         {:ok, port} <- open_port(command, opts),
-         {:ok, proof, guardian} <- establish_cleanup(port, opts, limits) do
+         {:ok, guardian} <- Guardian.start(owner, self(), generation, command, opts, limits),
+         {:ok, proof} <- Guardian.proof(guardian, generation) do
+      Process.put({__MODULE__, :guardian}, guardian)
+
       {:ok,
        %{
          owner: owner,
          owner_monitor: owner_monitor,
          generation: generation,
-         port: port,
          proof: proof,
          guardian: guardian,
+         guardian_monitor: Process.monitor(guardian),
          limits: limits,
          decoder: Framing.new(max_frame_bytes: limits.max_frame_bytes),
          queue: :queue.new(),
@@ -62,7 +67,7 @@ defmodule Arbor.RPC.Subprocess.Actor do
     invalid =
       Enum.find(@defaults, fn {key, default} ->
         value = Keyword.get(opts, key, default)
-        not (is_integer(value) and value > 0)
+        not valid_limit?(key, value)
       end)
 
     if invalid do
@@ -76,6 +81,19 @@ defmodule Arbor.RPC.Subprocess.Actor do
     end
   end
 
+  defp valid_limit?(key, value)
+       when key in [
+              :startup_timeout,
+              :cleanup_timeout,
+              :term_grace,
+              :closed_retention,
+              :receipt_retention
+            ],
+       do: is_integer(value) and value in 1..60_000
+
+  defp valid_limit?(:max_write_bytes, value), do: is_integer(value) and value in 1..67_108_864
+  defp valid_limit?(_key, value), do: is_integer(value) and value > 0
+
   defp boolean_options(opts) do
     case Enum.find(
            [:process_group, :stderr_to_stdout],
@@ -83,61 +101,6 @@ defmodule Arbor.RPC.Subprocess.Actor do
          ) do
       nil -> :ok
       key -> {:error, {:invalid_option, key}}
-    end
-  end
-
-  defp open_port(command, opts) do
-    options = [
-      :binary,
-      :exit_status,
-      :eof,
-      :use_stdio,
-      :hide,
-      args: command.args,
-      cd: String.to_charlist(command.cd),
-      env: PortEnvironment.to_port(command.env),
-      busy_limits_port: {4096, 8192},
-      busy_limits_msgq: {4096, 8192}
-    ]
-
-    options =
-      if Keyword.get(opts, :stderr_to_stdout, false),
-        do: [:stderr_to_stdout | options],
-        else: options
-
-    # Retain the Port and its owned PID metadata after EOF, even if the child
-    # exits before init establishes cleanup proof. EOF itself is not proof of
-    # child death; exit_status drives natural-exit cleanup and terminal delivery.
-    {:ok, Port.open({:spawn_executable, String.to_charlist(command.executable)}, options)}
-  catch
-    :error, reason -> {:error, {:port_open_failed, reason}}
-  end
-
-  defp establish_cleanup(port, opts, limits) do
-    budget = Map.to_list(limits)
-
-    case Cleanup.proof(port, Keyword.get(opts, :process_group, false), limits.cleanup_timeout) do
-      {:ok, proof} ->
-        actor = self()
-        guardian = spawn(fn -> guardian(actor, proof, budget) end)
-        {:ok, proof, guardian}
-
-      {:error, reason, proof} ->
-        case Cleanup.run(proof, port, budget) do
-          :ok -> {:error, reason}
-          {:error, _cleanup_reason} = error -> {:error, {:cleanup_failed, reason, error}}
-        end
-    end
-  end
-
-  # The guardian is not linked to the actor or opening owner. If either kills
-  # the actor while it owns the Port, the OS child still receives cleanup.
-  defp guardian(actor, proof, budget) do
-    monitor = Process.monitor(actor)
-
-    receive do
-      {:cleaned, ^actor} -> Process.demonitor(monitor, [:flush])
-      {:DOWN, ^monitor, :process, ^actor, _reason} -> Cleanup.run(proof, nil, budget)
     end
   end
 
@@ -180,8 +143,12 @@ defmodule Arbor.RPC.Subprocess.Actor do
   end
 
   def handle_call({_generation, {:write, data}}, _from, state) do
-    result = write(state.port, data, state.limits.max_write_bytes)
-    state = if result == {:error, :port_closed}, do: close(state, :port_closed), else: state
+    result =
+      with :ok <- validate_write(data, state.limits.max_write_bytes) do
+        Guardian.write(state.guardian, state.generation, data, 1100)
+      end
+
+    state = if result == {:error, :helper_closed}, do: close(state, :helper_closed), else: state
     reply(result, state)
   end
 
@@ -280,29 +247,11 @@ defmodule Arbor.RPC.Subprocess.Actor do
     end
   end
 
-  defp write(port, data, limit) do
-    case data_size(data) do
-      {:ok, bytes} when bytes > limit ->
-        {:error, :write_too_large}
-
-      {:ok, _bytes} ->
-        if Port.command(port, data, [:nosuspend]), do: :ok, else: {:error, :backpressure}
-
-      {:error, _reason} = error ->
-        error
-    end
-  catch
-    :error, :badarg -> {:error, :port_closed}
-  end
-
-  defp data_size(data) do
-    {:ok, :erlang.iolist_size(data)}
-  catch
-    :error, :badarg -> {:error, :invalid_iodata}
-  end
-
   @impl true
-  def handle_info({port, {:data, data}}, %{port: port, closed: nil} = state) do
+  def handle_info(
+        {:arbor_rpc_native, guardian, generation, {:chunk, sequence, data}},
+        %{guardian: guardian, generation: generation, closed: nil} = state
+      ) do
     {:message_queue_len, mailbox} = Process.info(self(), :message_queue_len)
 
     result =
@@ -314,6 +263,7 @@ defmodule Arbor.RPC.Subprocess.Actor do
 
     case result do
       {:ok, state, decoder} ->
+        Guardian.ack(state.guardian, state.generation, sequence)
         noreply(%{state | decoder: decoder})
 
       {:error, reason, state, decoder} ->
@@ -324,11 +274,14 @@ defmodule Arbor.RPC.Subprocess.Actor do
     end
   end
 
-  def handle_info({port, {:exit_status, status}}, %{port: port} = state),
-    do: noreply(close(state, {:exit_status, status}, :natural))
+  def handle_info(
+        {:arbor_rpc_native, guardian, generation, {:closed, reason}},
+        %{guardian: guardian, generation: generation} = state
+      ),
+      do: noreply(close(state, reason, :natural))
 
-  def handle_info({:EXIT, port, reason}, %{port: port} = state),
-    do: noreply(close(state, {:port_exit, reason}, :natural))
+  def handle_info({:DOWN, monitor, :process, _pid, reason}, %{guardian_monitor: monitor} = state),
+    do: noreply(close(state, {:guardian_down, reason}))
 
   def handle_info({:waiter_timeout, token}, state) do
     noreply(remove_waiters(state, &(&1.token == token), {:error, :timeout}))
@@ -357,6 +310,12 @@ defmodule Arbor.RPC.Subprocess.Actor do
     do: noreply(remove_waiters(state, &(&1.monitor == monitor), nil))
 
   def handle_info(_message, state), do: {:noreply, state}
+
+  defp validate_write(data, limit) do
+    if :erlang.iolist_size(data) <= limit, do: :ok, else: {:error, :write_too_large}
+  catch
+    :error, :badarg -> {:error, :invalid_iodata}
+  end
 
   defp enqueue(frame, state) do
     bytes = byte_size(frame)
@@ -484,13 +443,8 @@ defmodule Arbor.RPC.Subprocess.Actor do
   defp close(state, reason, kind \\ :requested)
   defp close(%{closed: closed} = state, _reason, _kind) when closed != nil, do: state
 
-  defp close(state, reason, kind) do
-    result =
-      if kind == :natural,
-        do: Cleanup.after_exit(state.proof, state.port, Map.to_list(state.limits)),
-        else: Cleanup.run(state.proof, state.port, Map.to_list(state.limits))
-
-    if result == :ok, do: send(state.guardian, {:cleaned, self()})
+  defp close(state, reason, _kind) do
+    result = Guardian.close(state.guardian, state.generation, state.limits.cleanup_timeout + 200)
     reason = if result == :ok, do: reason, else: {:cleanup_failed, reason, result}
     Process.send_after(self(), :closed_timeout, state.limits.closed_retention)
     %{state | closed: reason, cleanup_result: result}

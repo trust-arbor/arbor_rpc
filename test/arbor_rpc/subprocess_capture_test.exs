@@ -180,7 +180,7 @@ defmodule Arbor.RPC.SubprocessCaptureTest do
         result =
           Subprocess.capture(
             ["/bin/sh", "-c", "echo $$ > \"$1\"; exec sleep 30", "fixture", marker],
-            timeout: 100,
+            timeout: 300,
             cleanup_timeout: 200,
             term_grace: 50
           )
@@ -196,10 +196,14 @@ defmodule Arbor.RPC.SubprocessCaptureTest do
     pid = marker |> File.read!() |> String.trim() |> String.to_integer()
 
     actor =
-      Enum.find_value(Port.list(), fn port ->
-        if Port.info(port, :os_pid) == {:os_pid, pid} do
-          {:connected, actor} = Port.info(port, :connected)
-          actor
+      Enum.find(Process.list(), fn process ->
+        case Process.info(process, :dictionary) do
+          {:dictionary, dictionary} ->
+            List.keyfind(dictionary, {Arbor.RPC.Subprocess.Actor, :owner}, 0) ==
+              {{Arbor.RPC.Subprocess.Actor, :owner}, worker}
+
+          nil ->
+            false
         end
       end)
 

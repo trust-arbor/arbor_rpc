@@ -143,23 +143,27 @@ defmodule Arbor.RPC.SubprocessTest do
     eventually(fn -> not alive?(child) end)
   end
 
-  test "already-exited failed group proof never signals a retained stale PID" do
+  test "retired unmanaged cleanup never signals a stale or decoy numeric identity" do
     decoy = shell("exec cat")
     decoy_pid = Subprocess.os_pid(decoy)
     port = exited_port()
 
-    assert {:error, :child_not_process_group_leader, %{group: false}} =
-             Cleanup.proof(port, true, 500)
+    assert {:error, :unsupported_unmanaged_cleanup} = Cleanup.proof(port, true, 500)
 
     # Model PID reuse with a separate, owned live child. Its PID is deliberately
     # placed in the stale proof only after the original Port's actual exit.
-    assert :ok =
+    assert {:error, :unsupported_unmanaged_cleanup} =
              Cleanup.run(%{pid: decoy_pid, group: false}, port,
                cleanup_timeout: 500,
                term_grace: 100
              )
 
-    assert Port.info(port) == nil
+    assert {:error, :unsupported_unmanaged_cleanup} =
+             Cleanup.after_exit(%{pid: decoy_pid, group: true}, port, [])
+
+    # The unmanaged fixture has already exited; only its owning test closes it.
+    assert Port.info(port) != nil
+    Port.close(port)
     assert :ok = Subprocess.write(decoy, "still alive\n")
     assert {:ok, "still alive"} = FramedStream.next(decoy, 500)
   end
@@ -684,7 +688,7 @@ defmodule Arbor.RPC.SubprocessTest do
     assert System.monotonic_time(:millisecond) - started < 1500
   end
 
-  test "Port mailbox pressure fails explicitly and raw messages can precede the actor's check" do
+  test "native output credit admits only one raw chunk while the actor is suspended" do
     handle =
       shell("read go; sleep 0.05; dd if=/dev/zero bs=65536 count=32 2>/dev/null; sleep 1",
         max_mailbox_messages: 1,
@@ -703,17 +707,20 @@ defmodule Arbor.RPC.SubprocessTest do
       end
     end)
 
-    eventually(fn ->
-      case Process.info(actor, :message_queue_len) do
-        {:message_queue_len, count} -> count > 1
-        _ -> false
-      end
-    end)
+    chunk_count = fn ->
+      {:messages, messages} = Process.info(actor, :messages)
 
-    # This deliberately proves the documented transient mailbox limitation:
-    # actor queue counters cannot stop asynchronous driver messages arriving.
+      Enum.count(messages, fn
+        {:arbor_rpc_native, _guardian, _generation, {:chunk, _sequence, _bytes}} -> true
+        _ -> false
+      end)
+    end
+
+    eventually(fn -> chunk_count.() == 1 end)
+    Process.sleep(50)
+    assert chunk_count.() == 1
     :erlang.resume_process(actor)
-    assert {:closed, :mailbox_pressure, _remainder} = FramedStream.next(handle, 1000)
+    assert :ok = Subprocess.close(handle)
   end
 
   test "new child generations cannot accept old acknowledgement tokens" do
