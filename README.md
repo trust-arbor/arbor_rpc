@@ -1,4 +1,4 @@
-# ArborRPC
+# Arbor.RPC
 
 Shared JSON-RPC, framing and environment mechanics for Arbor protocols.
 

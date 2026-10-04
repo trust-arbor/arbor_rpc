@@ -1,4 +1,4 @@
-defmodule ArborRPC.Framing do
+defmodule Arbor.RPC.Framing do
   @moduledoc """
   A byte-bounded newline frame decoder independent of protocol validation.
 

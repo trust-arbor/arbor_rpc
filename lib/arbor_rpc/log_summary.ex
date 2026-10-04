@@ -1,4 +1,4 @@
-defmodule ArborRPC.LogSummary do
+defmodule Arbor.RPC.LogSummary do
   @moduledoc "Shared LogSummary mechanics."
 
   @spec describe(term()) :: String.t()

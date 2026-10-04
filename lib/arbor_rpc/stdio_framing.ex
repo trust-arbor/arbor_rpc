@@ -1,4 +1,4 @@
-defmodule ArborRPC.StdioFraming do
+defmodule Arbor.RPC.StdioFraming do
   @moduledoc "Shared StdioFraming mechanics."
 
   # The one place that knows how a JSON-RPC frame crosses an IO device.

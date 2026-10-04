@@ -1,8 +1,8 @@
-defmodule ArborRPC.StdioFramingTest do
+defmodule Arbor.RPC.StdioFramingTest do
   use ExUnit.Case, async: true
 
-  alias ArborRPC.StdioFraming
-  alias ArborRPC.Test.I18nCorpus
+  alias Arbor.RPC.StdioFraming
+  alias Arbor.RPC.Test.I18nCorpus
 
   for mode <- [:unicode, :latin1] do
     describe "on a device opened in #{mode} mode" do

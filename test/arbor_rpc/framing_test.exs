@@ -1,7 +1,7 @@
-defmodule ArborRPC.FramingTest do
+defmodule Arbor.RPC.FramingTest do
   use ExUnit.Case, async: true
 
-  alias ArborRPC.Framing
+  alias Arbor.RPC.Framing
 
   test "a chunk may contain many valid frames larger than the per-frame limit in total" do
     state = Framing.new(max_frame_bytes: 4)

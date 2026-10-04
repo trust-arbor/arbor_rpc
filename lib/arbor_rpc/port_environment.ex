@@ -1,4 +1,4 @@
-defmodule ArborRPC.PortEnvironment do
+defmodule Arbor.RPC.PortEnvironment do
   @moduledoc "Shared PortEnvironment mechanics."
 
   @isolated_allowlist ~w(

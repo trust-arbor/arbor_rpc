@@ -1,7 +1,7 @@
-defmodule ArborRPC.JSONRPCTest do
+defmodule Arbor.RPC.JSONRPCTest do
   use ExUnit.Case, async: true
 
-  alias ArborRPC.JSONRPC
+  alias Arbor.RPC.JSONRPC
 
   test "builds requests, notifications, responses, and errors" do
     assert JSONRPC.request("tools/list", %{}, 1) == %{

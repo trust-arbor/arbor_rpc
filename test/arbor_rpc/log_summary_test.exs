@@ -1,7 +1,7 @@
-defmodule ArborRPC.LogSummaryTest do
+defmodule Arbor.RPC.LogSummaryTest do
   use ExUnit.Case, async: true
 
-  alias ArborRPC.LogSummary
+  alias Arbor.RPC.LogSummary
 
   test "summaries never render nested values" do
     secret = "sentinel-super-secret"

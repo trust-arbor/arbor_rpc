@@ -1,7 +1,7 @@
-defmodule ArborRPC.PortEnvironmentTest do
+defmodule Arbor.RPC.PortEnvironmentTest do
   use ExUnit.Case, async: false
 
-  alias ArborRPC.PortEnvironment
+  alias Arbor.RPC.PortEnvironment
 
   test "validates supported child environment policies" do
     assert :ok = PortEnvironment.validate_policy([])

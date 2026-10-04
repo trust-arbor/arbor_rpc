@@ -1,7 +1,7 @@
-defmodule ArborRPC.Internal.LineBufferTest do
+defmodule Arbor.RPC.Internal.LineBufferTest do
   use ExUnit.Case, async: true
 
-  alias ArborRPC.Internal.LineBuffer
+  alias Arbor.RPC.Internal.LineBuffer
 
   test "drains complete newline-delimited JSON messages" do
     buffer = ~s({"id":1}\n[{"id":2}]\n)

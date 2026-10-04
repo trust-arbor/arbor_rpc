@@ -1,4 +1,4 @@
-defmodule ArborRPC.JSONRPC do
+defmodule Arbor.RPC.JSONRPC do
   @moduledoc "Shared JSONRPC mechanics."
 
   @jsonrpc "2.0"

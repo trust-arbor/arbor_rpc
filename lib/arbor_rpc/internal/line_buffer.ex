@@ -1,4 +1,4 @@
-defmodule ArborRPC.Internal.LineBuffer do
+defmodule Arbor.RPC.Internal.LineBuffer do
   @moduledoc "Shared LineBuffer mechanics."
 
   @type invalid_line :: {:invalid_json, String.t()}
