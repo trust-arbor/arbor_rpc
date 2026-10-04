@@ -23,7 +23,7 @@ defmodule Arbor.RPC.FramingTest do
     data = Enum.join(frames, "\n") <> "\n"
 
     for offset <- 0..byte_size(data) do
-      <<first::binary-size(offset), second::binary>> = data
+      <<first::binary-size(^offset), second::binary>> = data
       assert {:ok, a, partial} = Framing.push(Framing.new(max_frame_bytes: 8), first)
       assert {:ok, b, _} = Framing.push(partial, second)
       assert a ++ b == frames

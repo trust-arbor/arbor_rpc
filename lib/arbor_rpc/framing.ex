@@ -73,7 +73,7 @@ defmodule Arbor.RPC.Framing do
         end
 
       {offset, 1} when byte_size(remainder) + offset <= limit ->
-        <<frame::binary-size(offset), "\n", rest::binary>> = data
+        <<frame::binary-size(^offset), "\n", rest::binary>> = data
 
         case callback.(remainder <> frame, acc) do
           {:ok, acc} -> decode(rest, "", limit, acc, %{state | remainder: ""}, callback)
