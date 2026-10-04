@@ -82,7 +82,14 @@ defmodule Arbor.RPC.MixProject do
         files: ~w(lib c_src mix.exs .formatter.exs README.md LICENSE CHANGELOG.md)
       ],
       source_url: "https://github.com/trust-arbor/arbor_acp",
-      docs: [name: "Arbor.RPC", main: "readme", extras: ["README.md", "CHANGELOG.md"]]
+      docs: [
+        name: "Arbor.RPC",
+        main: "readme",
+        extras: ["README.md", "CHANGELOG.md"],
+        source_ref: "arbor_rpc-v#{@version}",
+        source_url_pattern:
+          "https://github.com/trust-arbor/arbor_acp/blob/arbor_rpc-v#{@version}/packages/arbor_rpc/%{path}#L%{line}"
+      ]
     ]
   end
 
@@ -93,14 +100,22 @@ defmodule Arbor.RPC.MixProject do
 
   defp deps do
     [
-      external_dep(:jason, "~> 1.4")
+      external_dep(:jason, "~> 1.4"),
+      external_dep(:ex_doc, "~> 0.40", only: :dev, runtime: false)
     ]
   end
 
-  defp external_dep(app, version) do
+  defp external_dep(app, version, opts \\ []) do
     case System.get_env("ARBOR_V2_DEPS") do
-      nil -> {app, version}
-      directory -> {app, path: Path.join(directory, to_string(app)), override: true}
+      nil ->
+        {app, version, opts}
+
+      directory ->
+        {app, version,
+         Keyword.merge(opts,
+           path: Path.join(directory, to_string(app)),
+           override: true
+         )}
     end
   end
 end

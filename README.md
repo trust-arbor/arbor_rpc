@@ -102,3 +102,18 @@ unimplemented and fails safely as unsupported. Linux CI source builds, installed
 archive/release lookup, broader platform/pressure measurement, helper hard death,
 uninterruptible children and escaped descendant policy remain explicit release
 gates. The native prototype and local candidate are not a published release.
+
+## Standalone documentation
+
+From the workspace root, run:
+
+```sh
+cd packages/arbor_rpc
+ARBOR_V2_LOCAL=1 MIX_ENV=dev mix deps.get
+ARBOR_V2_LOCAL=1 MIX_ENV=dev mix docs --warnings-as-errors
+```
+
+ExDoc is a dev-only dependency and does not run in consumer applications. Source
+links use `arbor_rpc-v<version>` and the `packages/arbor_rpc/` source prefix.
+Version tags are created only for a reviewed release; this unpublished development
+snapshot does not imply that those prospective tags already exist.
