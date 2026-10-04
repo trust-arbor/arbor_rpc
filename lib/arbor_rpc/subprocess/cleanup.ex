@@ -37,7 +37,22 @@ defmodule Arbor.RPC.Subprocess.Cleanup do
 
   def run(nil, port, _opts), do: close_port(port)
 
+  def run(%{group: false} = proof, port, opts) when is_port(port) do
+    # :eof keeps PID metadata after actual child exit. An already-delivered
+    # exit_status proves this direct child was reaped, so avoid signalling a
+    # PID that may have been reused. EOF alone never takes this path.
+    receive do
+      {^port, {:exit_status, _status}} -> close_port(port)
+    after
+      0 -> cleanup(proof, port, opts)
+    end
+  end
+
   def run(proof, port, opts) do
+    cleanup(proof, port, opts)
+  end
+
+  defp cleanup(proof, port, opts) do
     deadline = now() + Keyword.fetch!(opts, :cleanup_timeout)
     # Stop future driver input before the TERM grace period. Cleanup still
     # uses the owned PID/group proof captured while the Port was open.

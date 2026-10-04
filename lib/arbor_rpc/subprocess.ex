@@ -30,6 +30,10 @@ defmodule Arbor.RPC.Subprocess do
   actor stops after terminal delivery; unused buffered frames expire after
   `:closed_retention` with an explicit drain-timeout closure. Group cleanup is
   accepted on Unix only after verifying the owned child is its group leader.
+  The Port retains PID metadata after EOF; actual `exit_status`, rather than
+  EOF alone, proves direct-child death. A group leader that exits before group
+  ownership can be measured is rejected with `:child_not_process_group_leader`.
+  No command replay or unverified group signalling occurs.
   Windows tree cleanup requires platform qualification before a release.
   """
 

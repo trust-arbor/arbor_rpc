@@ -13,6 +13,9 @@ cleanup requires proof that the owned child PID equals its process group ID;
 arbitrary caller PIDs and host groups are never accepted as targets.
 
 `Arbor.RPC.FramedStream.next/2` drains buffered newline frames before waiting.
+Protocol filters use `next_until/3` with one original monotonic deadline across
+retries. Explicit zero polls pass `buffered_only: true` with their original
+cutoff, so skipping a banner cannot accept a later-arriving frame.
 Alternatively, subscribe with a bounded window and acknowledge each frame after
 processing it:
 
@@ -58,8 +61,16 @@ drain with an explicit `:drain_timeout`, so a long-lived owner cannot accumulate
 closed actors across reconnects. Read deadlines start in the caller, including
 time a request spends waiting in the actor mailbox. Cleanup requires a separate
 50 ms KILL allowance beyond TERM grace and reports failure when its budget is
-exhausted. Natural group cleanup
-runs when the Port reports the child's exit; descendants retaining its output
-pipe can delay that report. Windows cleanup and Unix/macOS/Linux pressure and
-lifecycle matrix qualification remain release gates. Existing MCP/ACP/Pi callers
-still use legacy wrappers while this new API is reviewed and integrated.
+exhausted. The direct executable is opened with `:eof`, retaining its PID
+metadata even after a very fast exit without a launcher or command replay.
+EOF alone does not prove death: a live child may close stdout. Only actual
+`exit_status` prevents signalling a retained PID that could have been reused.
+Group mode still requires measuring the owned child as its group leader; if
+that leader exits before measurement, startup returns
+`:child_not_process_group_leader`. Supporting such fast group startup remains
+a qualification gate, and an unverified group is never signalled.
+Natural group cleanup runs when the Port reports the child's exit; descendants
+retaining its output pipe can delay that report. Windows cleanup and Unix/macOS/Linux pressure and
+lifecycle matrix qualification remain release gates. ACP bridges, Pi managed
+sessions and native ACP child stdio adopt this API; each consuming package
+still requires its own release qualification.

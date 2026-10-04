@@ -1,7 +1,7 @@
 defmodule Arbor.RPC.SubprocessTest do
   use ExUnit.Case, async: false
   alias Arbor.RPC.{FramedStream, Subprocess}
-  alias Arbor.RPC.Subprocess.Command
+  alias Arbor.RPC.Subprocess.{Cleanup, Command}
 
   @moduletag timeout: 10_000
 
@@ -62,6 +62,124 @@ defmodule Arbor.RPC.SubprocessTest do
 
     assert {:ok, "☃"} = FramedStream.next(handle, 500)
     assert :ok = Subprocess.close(handle)
+  end
+
+  test "immediately exiting children deliver complete output and unfinished EOF without replay",
+       %{directory: directory} do
+    countfile = Path.join(directory, "executions")
+
+    for _ <- 1..20 do
+      assert {:ok, handle} =
+               Subprocess.open([
+                 "/bin/sh",
+                 "-c",
+                 "printf x >> \"$1\"; printf 'complete\\nfragment'",
+                 "fixture",
+                 countfile
+               ])
+
+      assert {:ok, "complete"} = FramedStream.next(handle, 1000)
+      assert {:closed, {:exit_status, 0}, "fragment"} = FramedStream.next(handle, 1000)
+      assert :ok = Subprocess.close(handle)
+    end
+
+    assert File.read!(countfile) == String.duplicate("x", 20)
+  end
+
+  test "direct startup preserves exact child argv and initial stdin bytes" do
+    values = ["space value", "quote'\"value", "$(printf unsafe)", "line\nbreak", ""]
+    assert {:ok, handle} = Subprocess.open(["/usr/bin/printf", "%s\\n" | values])
+    assert {:ok, "space value"} = FramedStream.next(handle, 1000)
+    assert {:ok, "quote'\"value"} = FramedStream.next(handle, 1000)
+    assert {:ok, "$(printf unsafe)"} = FramedStream.next(handle, 1000)
+    assert {:ok, "line"} = FramedStream.next(handle, 1000)
+    assert {:ok, "break"} = FramedStream.next(handle, 1000)
+    assert {:ok, ""} = FramedStream.next(handle, 1000)
+    assert {:closed, {:exit_status, 0}, ""} = FramedStream.next(handle, 1000)
+
+    assert {:ok, handle} = Subprocess.open(["/bin/cat"])
+    assert :ok = Subprocess.write(handle, "first protocol bytes\n")
+    assert {:ok, "first protocol bytes"} = FramedStream.next(handle, 1000)
+    assert :ok = Subprocess.close(handle)
+  end
+
+  test "direct startup neither mutates child environment nor evaluates shell startup files",
+       %{directory: directory} do
+    marker = Path.join(directory, "startup-ran")
+    startup = Path.join(directory, "startup-file")
+    File.write!(startup, "printf bad > '#{marker}'\n")
+
+    for policy <- [:isolated, :inherit],
+        values <- [
+          %{"PWD" => false, "SHLVL" => false, "_" => false},
+          %{"PWD" => "literal-pwd", "SHLVL" => "literal-shlvl", "_" => "literal-underscore"}
+        ] do
+      env = Map.merge(values, %{"ENV" => startup, "BASH_ENV" => startup})
+
+      assert {:ok, handle} =
+               Subprocess.open(["/usr/bin/env"], environment_policy: policy, env: env)
+
+      output = collect_frames(handle)
+
+      for {key, value} <- env do
+        if value == false,
+          do: refute(Enum.any?(output, &String.starts_with?(&1, key <> "="))),
+          else: assert((key <> "=" <> value) in output)
+      end
+
+      refute File.exists?(marker)
+    end
+  end
+
+  test "EOF with a live child is not treated as child death", %{directory: directory} do
+    pidfile = Path.join(directory, "stdout-closed-child")
+    handle = shell("exec 1>&-; echo $$ > '#{pidfile}'; exec sleep 30")
+    eventually(fn -> File.exists?(pidfile) end)
+    child = File.read!(pidfile) |> String.trim() |> String.to_integer()
+    assert {:error, :timeout} = FramedStream.next(handle, 30)
+    assert Subprocess.connected?(handle)
+    assert alive?(child)
+    assert :ok = Subprocess.close(handle)
+    eventually(fn -> not alive?(child) end)
+  end
+
+  test "already-exited failed group proof never signals a retained stale PID" do
+    decoy = shell("exec cat")
+    decoy_pid = Subprocess.os_pid(decoy)
+    port = exited_port()
+
+    assert {:error, :child_not_process_group_leader, %{group: false}} =
+             Cleanup.proof(port, true, 500)
+
+    # Model PID reuse with a separate, owned live child. Its PID is deliberately
+    # placed in the stale proof only after the original Port's actual exit.
+    assert :ok =
+             Cleanup.run(%{pid: decoy_pid, group: false}, port,
+               cleanup_timeout: 500,
+               term_grace: 100
+             )
+
+    assert Port.info(port) == nil
+    assert :ok = Subprocess.write(decoy, "still alive\n")
+    assert {:ok, "still alive"} = FramedStream.next(decoy, 500)
+  end
+
+  test "immediate lifetime-owner shutdown reaps actors around fast child exit" do
+    for _ <- 1..10 do
+      owner =
+        spawn(fn ->
+          receive do
+            :stop -> :ok
+          end
+        end)
+
+      assert {:ok, handle} = Subprocess.open(["/usr/bin/printf", "done"], owner: owner)
+      actor = hd(Subprocess.linked_processes(handle))
+      monitor = Process.monitor(actor)
+      Process.exit(owner, :kill)
+      assert_receive {:DOWN, ^monitor, :process, ^actor, :normal}, 1000
+      assert :ok = Subprocess.close(handle)
+    end
   end
 
   test "a per-frame byte overflow closes explicitly, including mid-UTF8 input" do
@@ -625,6 +743,35 @@ defmodule Arbor.RPC.SubprocessTest do
     assert {:ok, handle} = Subprocess.open(["/bin/sh", "-c", script], opts)
     on_exit(fn -> Subprocess.close(handle) end)
     handle
+  end
+
+  defp collect_frames(handle) do
+    case FramedStream.next(handle, 1000) do
+      {:ok, frame} -> [frame | collect_frames(handle)]
+      {:closed, {:exit_status, 0}, ""} -> []
+      result -> flunk("unexpected environment probe result: #{inspect(result)}")
+    end
+  end
+
+  defp exited_port do
+    port =
+      Port.open({:spawn_executable, ~c"/usr/bin/printf"}, [
+        :binary,
+        :use_stdio,
+        :exit_status,
+        :eof,
+        args: ["done"]
+      ])
+
+    receive do
+      {^port, {:exit_status, 0}} = actual_exit -> send(self(), actual_exit)
+    after
+      1000 -> flunk("child did not actually exit")
+    end
+
+    assert {:os_pid, pid} = Port.info(port, :os_pid)
+    assert pid > 1
+    port
   end
 
   defp alive?(pid) do

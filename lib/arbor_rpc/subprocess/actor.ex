@@ -87,6 +87,7 @@ defmodule Arbor.RPC.Subprocess.Actor do
     options = [
       :binary,
       :exit_status,
+      :eof,
       :use_stdio,
       :hide,
       args: command.args,
@@ -101,6 +102,9 @@ defmodule Arbor.RPC.Subprocess.Actor do
         do: [:stderr_to_stdout | options],
         else: options
 
+    # Retain the Port and its owned PID metadata after EOF, even if the child
+    # exits before init establishes cleanup proof. EOF itself is not proof of
+    # child death; exit_status drives natural-exit cleanup and terminal delivery.
     {:ok, Port.open({:spawn_executable, String.to_charlist(command.executable)}, options)}
   catch
     :error, reason -> {:error, {:port_open_failed, reason}}
@@ -116,8 +120,10 @@ defmodule Arbor.RPC.Subprocess.Actor do
         {:ok, proof, guardian}
 
       {:error, reason, proof} ->
-        Cleanup.run(proof, port, budget)
-        {:error, reason}
+        case Cleanup.run(proof, port, budget) do
+          :ok -> {:error, reason}
+          {:error, _cleanup_reason} = error -> {:error, {:cleanup_failed, reason, error}}
+        end
     end
   end
 
