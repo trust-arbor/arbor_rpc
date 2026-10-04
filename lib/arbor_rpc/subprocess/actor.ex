@@ -137,7 +137,9 @@ defmodule Arbor.RPC.Subprocess.Actor do
     do: {:reply, {:error, :remote_caller_not_supported}, state}
 
   def handle_call({generation, _request}, _from, %{generation: current} = state)
-      when generation != current, do: {:reply, {:error, :stale_generation}, state}
+      when generation != current do
+    {:reply, {:error, :stale_generation}, state}
+  end
 
   def handle_call({_generation, :stats}, _from, state) do
     {:reply,
@@ -154,6 +156,9 @@ defmodule Arbor.RPC.Subprocess.Actor do
   def handle_call({_generation, :connected?}, _from, state),
     do: {:reply, state.closed == nil, state}
 
+  def handle_call({_generation, :os_pid}, _from, state),
+    do: {:reply, state.proof.pid, state}
+
   def handle_call({_generation, :close}, _from, state) do
     state = state |> close(:closed) |> terminal_now()
     state = reply_all_waiters(state, {:closed, state.closed, Framing.remainder(state.decoder)})
@@ -161,7 +166,9 @@ defmodule Arbor.RPC.Subprocess.Actor do
   end
 
   def handle_call({_generation, {:write, _data}}, _from, %{closed: closed} = state)
-      when closed != nil, do: {:reply, {:error, :closed}, state}
+      when closed != nil do
+    {:reply, {:error, :closed}, state}
+  end
 
   def handle_call({_generation, {:write, data}}, _from, state) do
     result = write(state.port, data, state.limits.max_write_bytes)
@@ -174,7 +181,9 @@ defmodule Arbor.RPC.Subprocess.Actor do
         _from,
         %{consumer: consumer} = state
       )
-      when consumer != nil, do: {:reply, {:error, :subscribed}, state}
+      when consumer != nil do
+    {:reply, {:error, :subscribed}, state}
+  end
 
   def handle_call({_generation, {:next, deadline, acceptance_deadline, immediate}}, from, state) do
     cond do

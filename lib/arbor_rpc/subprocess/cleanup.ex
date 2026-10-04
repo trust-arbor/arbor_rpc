@@ -24,7 +24,9 @@ defmodule Arbor.RPC.Subprocess.Cleanup do
   end
 
   defp verify_group(%{pid: pid} = proof, timeout) do
-    with {:ok, output, 0} <- utility("ps", ["-o", "pgid=", "-p", Integer.to_string(pid)], timeout),
+    args = ["-o", "pgid=", "-p", Integer.to_string(pid)]
+
+    with {:ok, output, 0} <- utility("ps", args, timeout),
          {^pid, ""} <- Integer.parse(String.trim(output)),
          true <- pid != String.to_integer(System.pid()) do
       {:ok, %{proof | group: true}}

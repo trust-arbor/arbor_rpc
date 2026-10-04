@@ -106,6 +106,15 @@ defmodule Arbor.RPC.Subprocess do
   @spec connected?(t()) :: boolean()
   def connected?(handle), do: call(handle, :connected?) == true
 
+  @doc "The owned child's OS PID for diagnostics, or nil after the actor stops."
+  @spec os_pid(t()) :: pos_integer() | nil
+  def os_pid(handle) do
+    case call(handle, :os_pid) do
+      pid when is_integer(pid) and pid > 0 -> pid
+      _ -> nil
+    end
+  end
+
   @doc "The stable process a protocol wrapper may monitor for connection failure."
   @spec linked_processes(t()) :: [pid()]
   def linked_processes(%__MODULE__{pid: pid}), do: [pid]

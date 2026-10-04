@@ -414,6 +414,15 @@ defmodule Arbor.RPC.SubprocessTest do
     assert {:error, :closed} = Subprocess.write(handle, "a")
   end
 
+  test "OS PID diagnostics identify only the owned child and disappear after close" do
+    handle = shell("echo $$; exec sleep 30")
+    assert {:ok, pid_text} = FramedStream.next(handle, 500)
+    assert Subprocess.os_pid(handle) == String.to_integer(pid_text)
+    refute Subprocess.os_pid(handle) == String.to_integer(System.pid())
+    assert :ok = Subprocess.close(handle)
+    assert Subprocess.os_pid(handle) == nil
+  end
+
   test "write admission rejects payloads before they enter a suspended actor mailbox" do
     handle = shell("exec sleep 30", max_write_bytes: 16)
     actor = hd(Subprocess.linked_processes(handle))
