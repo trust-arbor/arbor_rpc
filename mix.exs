@@ -19,7 +19,7 @@ defmodule Arbor.RPC.MixProject do
     ]
   end
 
-  def application, do: [extra_applications: [:logger]]
+  def application, do: [extra_applications: [:logger, :crypto]]
   defp paths(:test), do: ["lib", "dev", "test/support"]
   defp paths(:dev), do: ["lib", "dev"]
   defp paths(_), do: ["lib"]
