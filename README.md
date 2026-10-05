@@ -113,19 +113,25 @@ group policy match `open/2`.
 ## Source build and remaining gates
 
 The custom Mix compiler builds reviewed `c_src/subprocess_helper.c` with a C17
-compiler on macOS/Linux. `CC` selects an executable; compiler flags and argv are
+compiler on macOS/Darwin and Linux. It runs during RPC source installation,
+including transitive MCP/ACP installation for HTTP-only, BEAM-only or other use
+that never opens a subprocess. `CC` selects an executable; compiler flags and argv are
 fixed, without shell command strings. The generated `priv/native` executable is
-ignored and excluded from Hex source archives. A package install builds it once;
-release/runtime lookup uses `:code.priv_dir(:arbor_rpc)`. Runtime never invokes a
-compiler. Framing/JSON-RPC do not start a helper. Missing helper and unsupported
-platform fail clearly; there is no numeric PID fallback or NIF.
+ignored and excluded from Hex source archives; no prebuilt helper is promised.
+A source package install builds it for the target. Assembled releases must
+include that built helper; release/runtime lookup uses
+`:code.priv_dir(:arbor_rpc)`. An installed runtime never invokes a compiler.
+Framing/JSON-RPC do not start a helper. Missing helper and unsupported platform
+errors remain explicit; there is no numeric PID fallback or NIF.
 
-Source-build packaging is a draft assumption pending the packaging decision.
-macOS checks do not establish Linux qualification. Windows handle/Job cleanup is
-unimplemented and fails safely as unsupported. Linux CI source builds, installed
-archive/release lookup, broader platform/pressure measurement, helper hard death,
-uninterruptible children and escaped descendant policy remain explicit release
-gates. The native prototype and local candidate are not a published release.
+Windows native subprocess operations are explicitly unsupported; the compiler
+skips the helper on unsupported platforms and framing remains available. A
+Windows backend is not required for the initial v2 release. This source-install
+policy does not certify every Darwin/Linux architecture: advertise only the
+matrix qualified from final source archives and installed releases. Broader
+platform/pressure measurement, helper hard death and uninterruptible child exit
+remain qualification gates. Escaped descendants remain outside the native
+ownership contract. The local candidate is not a published release.
 
 ## Standalone documentation
 

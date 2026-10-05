@@ -47,11 +47,16 @@ defmodule Arbor.RPC.Subprocess do
   Helper/guardian loss cannot confirm cleanup. Numeric PID diagnostics are not
   signalling authority; retired unmanaged cleanup is unsupported.
 
-  The draft requires a build-time C compiler on supported Unix platforms, no
-  runtime compiler or NIF. Missing helper and unsupported platform errors have
-  no numeric signalling fallback. Installed/release lookup uses `:code.priv_dir`.
-  Linux/macOS lifecycle and pressure qualification, Windows handle/Job support,
-  helper hard death and uninterruptible child exit remain release gates.
+  Source installation on macOS/Darwin and Linux requires a C17 compiler, even
+  for transitive MCP/ACP use that never opens a subprocess. Reviewed C source
+  ships rather than a prebuilt helper; assembled releases include the helper
+  built for their target. Installed runtime lookup uses `:code.priv_dir` with
+  no runtime compiler or NIF. Windows native subprocess operations are explicitly
+  unsupported; framing is separate. Missing helper and unsupported platform
+  errors have no numeric signalling fallback. Only the actually qualified
+  platform/architecture matrix is supported. Final-source lifecycle/pressure,
+  helper hard death and uninterruptible child exit remain qualification gates;
+  this release does not require a Windows backend.
   """
 
   alias Arbor.RPC.Subprocess.{Actor, Guardian, Receipt, WriteAdmission}
