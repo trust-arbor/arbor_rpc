@@ -1,0 +1,77 @@
+name: Package checks
+on:
+  pull_request:
+  push:
+    branches: [main, master, 'codex/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    name: ${{ matrix.package }} / Elixir ${{ matrix.toolchain.elixir }} / OTP ${{ matrix.toolchain.otp }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [arbor_rpc]
+        toolchain:
+          - {elixir: '1.17.3', otp: '27.0'}
+          - {elixir: '1.18.5', otp: '27.3.4.18'}
+          - {elixir: '1.19.6', otp: '28.5.0.7'}
+          - {elixir: '1.20.4', otp: '29.1.1'}
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124
+        with:
+          otp-version: ${{ matrix.toolchain.otp }}
+          elixir-version: ${{ matrix.toolchain.elixir }}
+          version-type: strict
+      - run: mix deps.get
+      - run: mix format --check-formatted
+        if: matrix.toolchain.elixir == '1.17.3'
+      # Compile dependencies separately so new OTP dependency warnings do not
+      # weaken the warnings-as-errors gate for this package in dev or test.
+      - run: mix deps.compile
+      - run: mix compile --warnings-as-errors --no-deps-check
+      - run: MIX_ENV=test mix deps.compile
+      - run: mix test --warnings-as-errors --no-deps-check
+      - run: elixir scripts/check_boundaries.exs
+      - name: Build the publishable manifest without workspace overrides
+        run: mix hex.build
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ matrix.package }}-${{ matrix.toolchain.elixir }}
+          path: ./*.tar
+  archive_consumer:
+    name: Archive consumer / Elixir ${{ matrix.toolchain.elixir }} / OTP ${{ matrix.toolchain.otp }}
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain:
+          - {elixir: '1.17.3', otp: '27.0'}
+          - {elixir: '1.18.5', otp: '27.3.4.18'}
+          - {elixir: '1.19.6', otp: '28.5.0.7'}
+          - {elixir: '1.20.4', otp: '29.1.1'}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124
+        with:
+          otp-version: ${{ matrix.toolchain.otp }}
+          elixir-version: ${{ matrix.toolchain.elixir }}
+          version-type: strict
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: arbor_rpc-${{ matrix.toolchain.elixir }}
+          path: archive-consumer-input
+          merge-multiple: true
+      - run: python3 scripts/check_archive_consumer.py archive-consumer-input

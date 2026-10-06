@@ -79,16 +79,16 @@ defmodule Arbor.RPC.MixProject do
       description: "ArborRPC: shared JSON-RPC, framing and environment mechanics.",
       package: [
         licenses: ["MIT"],
-        links: %{"GitHub" => "https://github.com/trust-arbor/arbor_acp"},
+        links: %{"GitHub" => "https://github.com/trust-arbor/arbor_rpc"},
         files: ~w(lib c_src mix.exs .formatter.exs README.md LICENSE CHANGELOG.md)
       ],
-      source_url: "https://github.com/trust-arbor/arbor_acp",
+      source_url: "https://github.com/trust-arbor/arbor_rpc",
       docs: [
         main: "readme",
         extras: ["README.md", "CHANGELOG.md"],
-        source_ref: "arbor_rpc-v#{@version}",
+        source_ref: "v#{@version}",
         source_url_pattern:
-          "https://github.com/trust-arbor/arbor_acp/blob/arbor_rpc-v#{@version}/packages/arbor_rpc/%{path}#L%{line}"
+          "https://github.com/trust-arbor/arbor_rpc/blob/v#{@version}/%{path}#L%{line}"
       ]
     ]
   end

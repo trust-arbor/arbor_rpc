@@ -1,0 +1,9 @@
+{
+  "source_repository": "https://github.com/trust-arbor/arbor_acp",
+  "source_revision": "958d6b8aae52856c5b9309a68bcf5676967fbb82",
+  "source_prefix": "packages/arbor_rpc",
+  "split_revision": "9213f299b716578df87ae81367ca5a80c152e6cd",
+  "tree": "81323cf28a39a07ad0b899ed86b9b3d41d686665",
+  "preserved_commits": 18,
+  "baseline_contents_identical": true
+}

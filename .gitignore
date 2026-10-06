@@ -1,0 +1,10 @@
+/_build/
+/deps/
+/doc/
+/cover/
+*.tar
+erl_crash.dump
+/_verification/
+/tmp/
+/priv/native/
+/test/support/native/vendor_fixture

@@ -4,6 +4,11 @@ ArborRPC provides shared JSON-RPC, framing and environment mechanics for ArborMC
 and ArborACP. Its Hex package and OTP application are `arbor_rpc`, and its module
 namespace is `Arbor.RPC.*`.
 
+This standalone repository owns RPC source, tests and release packaging. ACP and
+MCP consume it as an independent dependency. The extraction preserved 18 RPC
+commits; `SOURCE_SNAPSHOT` records its ACP source revision and identical initial
+subtree. Repository integration changes do not replace that source lineage.
+
 Version `2.0.0-rc.1` is an unpublished release candidate with a source-built native
 subprocess backend and unchanged bounded write defaults. The planned prerelease
 is for downstream migration testing; see the
@@ -146,15 +151,50 @@ ownership contract. The local candidate is not a published release.
 
 ## Standalone documentation
 
-From the workspace root, run:
+From this repository root, run:
 
 ```sh
-cd packages/arbor_rpc
-ARBOR_V2_LOCAL=1 MIX_ENV=dev mix deps.get
-ARBOR_V2_LOCAL=1 MIX_ENV=dev mix docs --warnings-as-errors
+MIX_ENV=dev mix deps.get
+MIX_ENV=dev mix docs --warnings-as-errors
 ```
 
 ExDoc is a dev-only dependency and does not run in consumer applications. Source
-links use `arbor_rpc-v<version>` and the `packages/arbor_rpc/` source prefix.
+links use `v<version>` in `trust-arbor/arbor_rpc`, with repository-root source
+paths.
 Version tags are created only for a reviewed release; this unpublished prerelease
 snapshot does not imply that those prospective tags already exist.
+
+
+## Development and source-archive checks
+
+`mise.toml` selects the established local development toolchain. CI retains four
+pinned Elixir/OTP pairs and tests the latest stable patches plus the latest stable
+BEAM pair separately; see the repository's `.github/BEAM_CI.md`. RPC does not
+require `ARBOR_V2_LOCAL` or a protocol workspace checkout. Leave
+`ARBOR_V2_DEPS` and build/dependency overrides unset for normal Hex packaging.
+
+```sh
+mix deps.get
+mix deps.compile
+mix compile --warnings-as-errors --no-deps-check
+MIX_ENV=test mix deps.compile
+mix test --warnings-as-errors --no-deps-check
+elixir scripts/check_boundaries.exs
+mix hex.build
+python3 scripts/check_archive_consumer.py . --expected-version 2.0.0-rc.1
+```
+
+The archive check unpacks exactly one RPC source archive into a fresh consumer,
+checks its literal/Hex version and root-tag documentation metadata, compiles the
+C17 helper from shipped source, and exercises exact subprocess bytes/status and
+typed cleanup. It checks both installed Mix code and an assembled OTP release
+with compiler lookup denied at probe time. The fixture's path dependency points
+only at the unpacked archive; it is not a publishable dependency override.
+
+RPC is packaged and released independently. Prepare a reviewed literal version
+and `v<version>` tag in this repository, and qualify its own archive before
+publishing it. Protocol packages declare their supported RPC version range.
+For this coordinated prerelease, publish RPC before dependent ACP/MCP packages.
+No tag or package publication is performed by the checks above. The historical
+48-hour gate remains incomplete; repository extraction or a passing CI run does
+not certify it.
