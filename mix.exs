@@ -70,6 +70,7 @@ defmodule Arbor.RPC.MixProject do
   def project do
     [
       app: :arbor_rpc,
+      name: "ArborRPC",
       version: @version,
       elixir: "~> 1.17",
       elixirc_paths: paths(Mix.env()),
@@ -83,7 +84,6 @@ defmodule Arbor.RPC.MixProject do
       ],
       source_url: "https://github.com/trust-arbor/arbor_acp",
       docs: [
-        name: "ArborRPC",
         main: "readme",
         extras: ["README.md", "CHANGELOG.md"],
         source_ref: "arbor_rpc-v#{@version}",
