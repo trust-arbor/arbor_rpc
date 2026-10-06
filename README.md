@@ -15,6 +15,68 @@ is for downstream migration testing; see the
 [v1 to v2 migration guide](https://github.com/trust-arbor/arbor_mcp/blob/codex/v2-migration/docs/guides/MIGRATING_V1_TO_V2.md).
 Publication is pending, and the final 48-hour stable-release gate has not passed.
 
+## Start here
+
+- [Quickstart](docs/QUICKSTART.md): capture a command, read newline frames, and
+  build a JSON-RPC envelope using the public API.
+- [Troubleshooting](docs/TROUBLESHOOTING.md): compiler, executable, pressure,
+  timeout and cleanup failures.
+- [Development](docs/DEVELOPMENT.md): tests, documentation and installed/release
+  archive checks.
+- [Changelog](CHANGELOG.md): release changes and remaining qualification.
+
+Use ArborMCP or ArborACP when your application needs their protocol negotiation,
+request validation and session behavior. Declare ArborRPC directly when your own
+code calls `Arbor.RPC.*`, even if a protocol package already depends on it.
+
+## Installation
+
+The Elixir minimum is 1.17. On macOS/Darwin and Linux, source installation needs
+a C17 compiler, including applications that use only JSON-RPC or framing. The
+compiler builds the native helper at installation time; assembled releases use
+that helper without a runtime compiler. Windows native subprocess operations
+are unsupported. See [source build requirements](#source-build-and-remaining-gates)
+for the platform and cleanup limits.
+
+While RC1 is unpublished, clone the standalone repository and use its root as a
+local dependency:
+
+```elixir
+defp deps do
+  [{:arbor_rpc, path: "../arbor_rpc"}]
+end
+```
+
+Then run `mix deps.get` and `mix compile` in the consuming project. Record the
+checkout's Git revision when sharing results. RPC itself needs no ACP/MCP
+checkout or `ARBOR_RPC_PATH` setting.
+
+Once RC1 is published, replace the path dependency with an exact Hex pin:
+
+```elixir
+{:arbor_rpc, "== 2.0.0-rc.1"}
+```
+
+That Hex example describes the future published candidate; it does not imply
+the package or its `v2.0.0-rc.1` tag exists today. Review your resolved lockfile
+and rebuild your application after changing dependency sources.
+
+## Public API map
+
+| Module | Use |
+|---|---|
+| `Arbor.RPC.JSONRPC` | Construct envelopes and decompose unvalidated messages; the protocol wrapper supplies validation. |
+| `Arbor.RPC.Framing` | Decode LF-delimited bytes with a per-frame limit; the caller bounds its delivery queue. |
+| `Arbor.RPC.StdioFraming` | Read/write UTF-8 line frames through an IO device's current encoding. |
+| `Arbor.RPC.PortEnvironment` | Apply the shared child-environment and release-PATH policy. |
+| `Arbor.RPC.Subprocess` | Own a native child, write bounded input, capture finite output and inspect cleanup receipts. |
+| `Arbor.RPC.FramedStream` | Consume subprocess output through pull reads or acknowledged push delivery. |
+| `Arbor.RPC.Subprocess.Receipt` | Interpret a retained child/group cleanup observation. |
+
+Keep subprocess handles and framing state opaque. Protocol integrations should
+use these public modules rather than calling the private Actor, Guardian or
+write-admission implementation.
+
 ## Native lifecycle contract
 
 `Arbor.RPC.Subprocess` returns an opaque handle with a fresh generation. Its
@@ -66,6 +128,13 @@ receive do
     handle_protocol_close(reason, unfinished_bytes)
 end
 ```
+
+Here `consume_frame/1` and `handle_protocol_close/2` are application callbacks.
+The subscriber must remain alive, acknowledge only after processing, and close
+the child when finished. The [quickstart](docs/QUICKSTART.md) includes a complete
+pull example with explicit cleanup. Pull reads and a push subscriber are mutually
+exclusive; `FramedStream.next/2` defaults to `:infinity`, so pass a finite timeout
+when a blocked read must return within an application budget.
 
 Queued and unacknowledged frames share count/byte limits. A native data credit
 permits one chunk of at most 16 KiB before Actor framing admission. Cleanup and
@@ -198,3 +267,10 @@ For this coordinated prerelease, publish RPC before dependent ACP/MCP packages.
 No tag or package publication is performed by the checks above. The historical
 48-hour gate remains incomplete; repository extraction or a passing CI run does
 not certify it.
+
+## Reporting issues
+
+Report suspected vulnerabilities through the
+[private vulnerability reporting form](https://github.com/trust-arbor/arbor_rpc/security/advisories/new).
+Use [GitHub issues](https://github.com/trust-arbor/arbor_rpc/issues) for other bugs
+and feature requests.

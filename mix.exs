@@ -80,12 +80,18 @@ defmodule Arbor.RPC.MixProject do
       package: [
         licenses: ["MIT"],
         links: %{"GitHub" => "https://github.com/trust-arbor/arbor_rpc"},
-        files: ~w(lib c_src mix.exs .formatter.exs README.md LICENSE CHANGELOG.md)
+        files: ~w(lib c_src docs mix.exs .formatter.exs README.md LICENSE CHANGELOG.md)
       ],
       source_url: "https://github.com/trust-arbor/arbor_rpc",
       docs: [
         main: "readme",
-        extras: ["README.md", "CHANGELOG.md"],
+        extras: [
+          "README.md",
+          "docs/QUICKSTART.md",
+          "docs/TROUBLESHOOTING.md",
+          "docs/DEVELOPMENT.md",
+          "CHANGELOG.md"
+        ],
         source_ref: "v#{@version}",
         source_url_pattern:
           "https://github.com/trust-arbor/arbor_rpc/blob/v#{@version}/%{path}#L%{line}"

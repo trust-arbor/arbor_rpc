@@ -32,12 +32,18 @@ jobs:
           elixir-version: ${{ matrix.toolchain.elixir }}
           version-type: strict
       - run: mix deps.get
+      - name: Audit owning-package dependencies
+        if: matrix.toolchain.elixir == '1.17.3'
+        run: mix hex.audit
       - run: mix format --check-formatted
         if: matrix.toolchain.elixir == '1.17.3'
       # Compile dependencies separately so new OTP dependency warnings do not
       # weaken the warnings-as-errors gate for this package in dev or test.
       - run: mix deps.compile
       - run: mix compile --warnings-as-errors --no-deps-check
+      - name: Generate owning-package documentation without warnings
+        if: matrix.toolchain.elixir == '1.17.3'
+        run: MIX_ENV=dev mix docs --warnings-as-errors
       - run: MIX_ENV=test mix deps.compile
       - run: mix test --warnings-as-errors --no-deps-check
       - run: elixir scripts/check_boundaries.exs
@@ -47,6 +53,57 @@ jobs:
         with:
           name: ${{ matrix.package }}-${{ matrix.toolchain.elixir }}
           path: ./*.tar
+  native_macos:
+    name: macOS native package and archive / Elixir 1.19.6 / OTP 28.5.0.7
+    # setup-beam supports macOS 15 on both runner architectures with OTP 28.
+    runs-on: macos-15
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124
+        with:
+          otp-version: '28.5.0.7'
+          elixir-version: '1.19.6'
+          version-type: strict
+      - name: Record native build toolchain
+        run: |
+          mkdir -p macos-evidence
+          elixir --version | tee macos-evidence/beam.txt
+          cc --version | tee macos-evidence/compiler.txt
+          python3 --version | tee macos-evidence/python.txt
+      - name: Install and record package dependencies
+        run: |
+          mix deps.get
+          mix deps | tee macos-evidence/dependencies.txt
+      - run: mix deps.compile
+      - run: mix compile --warnings-as-errors --no-deps-check
+      - run: MIX_ENV=test mix deps.compile
+      - name: Test the package and native subprocess helper
+        run: mix test --warnings-as-errors --no-deps-check | tee macos-evidence/package-tests.log
+      - name: Build the portable source archive
+        run: |
+          mkdir -p macos-archive-input
+          mix hex.build --output macos-archive-input/arbor_rpc-source.tar
+      - name: Verify installed helper and compiler-free release
+        run: |
+          python3 -B scripts/check_archive_consumer.py macos-archive-input \
+            --report macos-evidence/archive-consumer.json | tee macos-evidence/archive-consumer.log
+      - name: Preserve macOS native qualification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: arbor_rpc-macos-1.19.6
+          path: |
+            macos-evidence/
+            macos-archive-input/*.tar
+            mix.lock
+          if-no-files-found: warn
+          retention-days: 14
   archive_consumer:
     name: Archive consumer / Elixir ${{ matrix.toolchain.elixir }} / OTP ${{ matrix.toolchain.otp }}
     needs: package
