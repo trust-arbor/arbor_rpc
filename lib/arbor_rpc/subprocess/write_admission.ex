@@ -204,7 +204,7 @@ defmodule Arbor.RPC.Subprocess.WriteAdmission do
           abandon(table, token)
 
         :atomics.compare_exchange(entry.phase, 1, 0, 1) == :ok ->
-          result = execute.(entry.data, entry.deadline, {table, token})
+          result = execute_claimed(table, token, entry, execute)
 
           case result do
             {:uncertain, error} ->
@@ -227,6 +227,26 @@ defmodule Arbor.RPC.Subprocess.WriteAdmission do
       end
 
     :ok
+  end
+
+  defp execute_claimed(
+         table,
+         token,
+         %{phase: phase, producer: producer, deadline: deadline},
+         execute
+       ) do
+    # A drain snapshot can precede publication even though the shared phase
+    # becomes claimable. Read the published payload after taking ownership.
+    case entry(table, token) do
+      {:ok, %{phase: ^phase, producer: ^producer, deadline: ^deadline, data: data}}
+      when is_binary(data) ->
+        if :atomics.get(phase, 1) == 1 and not expired?(deadline) and Process.alive?(producer),
+          do: execute.(data, deadline, {table, token}),
+          else: {:error, :timeout}
+
+      _ ->
+        {:error, :closed}
+    end
   end
 
   def current?(nil, deadline), do: not expired?(deadline)

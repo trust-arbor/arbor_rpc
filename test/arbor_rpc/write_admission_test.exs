@@ -33,6 +33,115 @@ defmodule Arbor.RPC.Subprocess.WriteAdmissionTest do
     {:ok, vendor_fixture: fixture}
   end
 
+  test "a reserved drain snapshot executes the subsequently published binary exactly once" do
+    generation = make_ref()
+    deadline = System.monotonic_time(:millisecond) + 1000
+    first_token = make_ref()
+    second_token = make_ref()
+    first_reply = :erlang.alias()
+    second_reply = :erlang.alias()
+    first_payload = "first\n"
+    second_payload = "published\n"
+
+    table =
+      WriteAdmission.new(generation, %{
+        max_pending_writes: 2,
+        max_pending_write_bytes: 65_536,
+        max_write_bytes: 128
+      })
+
+    first_phase = :atomics.new(2, signed: true)
+    second_phase = :atomics.new(2, signed: true)
+    :atomics.put(first_phase, 1, 0)
+    :atomics.put(second_phase, 1, -1)
+
+    reserved = fn phase, reply, order ->
+      %{
+        producer: self(),
+        reply: reply,
+        deadline: deadline,
+        phase: phase,
+        data: nil,
+        bytes: 0,
+        order: order
+      }
+    end
+
+    first = reserved.(first_phase, first_reply, 1)
+    second = reserved.(second_phase, second_reply, 2)
+
+    first_bytes =
+      byte_size(first_payload) +
+        :erlang.external_size({first_token, %{first | bytes: 9_223_372_036_854_775_807}})
+
+    second_bytes =
+      byte_size(second_payload) +
+        :erlang.external_size({second_token, %{second | bytes: 9_223_372_036_854_775_807}})
+
+    entries = %{
+      first_token => %{first | data: first_payload, bytes: first_bytes},
+      second_token => %{second | bytes: second_bytes}
+    }
+
+    true = :ets.insert(table, {:budget, 2, first_bytes + second_bytes, false, false, entries})
+
+    try do
+      execute = fn data, original_deadline, {^table, token} = context ->
+        assert original_deadline == deadline
+        assert WriteAdmission.current?(context, original_deadline)
+
+        case token do
+          ^first_token ->
+            assert data == first_payload
+            [{:budget, count, bytes, sealed, wake, current}] = :ets.lookup(table, :budget)
+            unpublished = Map.fetch!(current, second_token)
+            assert unpublished.data == nil
+            assert unpublished.phase == second_phase
+            assert unpublished.deadline == deadline
+            assert unpublished.producer == self()
+
+            true =
+              :ets.insert(
+                table,
+                {:budget, count, bytes, sealed, wake,
+                 Map.put(current, second_token, %{unpublished | data: second_payload})}
+              )
+
+            assert :atomics.compare_exchange(second_phase, 1, -1, 0) == :ok
+
+          ^second_token ->
+            assert data == second_payload
+        end
+
+        send(self(), {:executed_write, token, data, original_deadline})
+        :ok
+      end
+
+      assert :ok = WriteAdmission.drain(table, execute)
+      assert_receive {:executed_write, ^first_token, ^first_payload, ^deadline}, 0
+      assert_receive {:executed_write, ^second_token, ^second_payload, ^deadline}, 0
+      assert_receive {:arbor_rpc_write, ^first_token, :ok}, 0
+      assert_receive {:arbor_rpc_write, ^second_token, :ok}, 0
+      refute_receive {:executed_write, _, _, _}, 0
+      refute_receive {:arbor_rpc_write, _, _}, 0
+
+      assert WriteAdmission.stats(table) == %{
+               pending_writes: 0,
+               pending_write_bytes: 0,
+               writes_sealed: false,
+               uncertain_writes: 0
+             }
+
+      assert :atomics.get(first_phase, 1) == 2
+      assert :atomics.get(second_phase, 1) == 2
+      assert [{:budget, 0, 0, false, false, %{}}] = :ets.lookup(table, :budget)
+    after
+      :erlang.unalias(first_reply)
+      :erlang.unalias(second_reply)
+      :ets.delete(table)
+    end
+  end
+
   test "one aggregate byte cap precedes a suspended Actor mailbox and expires without late writes",
        context do
     handle = vendor(context.vendor_fixture)
