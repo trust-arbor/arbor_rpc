@@ -1,8 +1,11 @@
 # Arbor.RPC
 
 Shared JSON-RPC, framing and environment mechanics for Arbor protocols.
-Version `2.0.0-rc.1` is unpublished. This isolated draft adds a source-built native
-subprocess backend; canonical defaults have not changed.
+Version `2.0.0-rc.1` is an unpublished release candidate with a source-built native
+subprocess backend and unchanged bounded write defaults. The planned prerelease
+is for downstream migration testing; see the
+[v1 to v2 migration guide](https://github.com/trust-arbor/arbor_mcp/blob/codex/v2-migration/docs/guides/MIGRATING_V1_TO_V2.md).
+Publication is pending, and the final 48-hour stable-release gate has not passed.
 
 ## Native lifecycle contract
 
@@ -84,6 +87,11 @@ its explicit `:infinity` host opt-in, outside the finite managed-call guarantee;
 aggregate credit still bounds retention, and the nested native admission
 attempt remains finite.
 
+The private write handoff reloads the published binary after claiming ownership
+and verifies the same phase, producer and original deadline. This prevents a
+reserved entry's earlier empty payload snapshot from reaching the native writer
+without changing public write limits or completion accounting.
+
 Timeout or caller death releases only work proven not to have started. Once a
 write starts, uncertainty remains charged until an actual native ACK or proven
 pre-command rejection. An authoritative later ACK can release a timed-out
@@ -145,5 +153,5 @@ ARBOR_V2_LOCAL=1 MIX_ENV=dev mix docs --warnings-as-errors
 
 ExDoc is a dev-only dependency and does not run in consumer applications. Source
 links use `arbor_rpc-v<version>` and the `packages/arbor_rpc/` source prefix.
-Version tags are created only for a reviewed release; this unpublished development
+Version tags are created only for a reviewed release; this unpublished prerelease
 snapshot does not imply that those prospective tags already exist.
