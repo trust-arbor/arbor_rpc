@@ -359,13 +359,59 @@ defmodule Arbor.RPC.Subprocess.WriteAdmissionTest do
     {:ok, sibling} = Subprocess.open(["/bin/cat"])
     :ok = :sys.suspend(guardian)
     producer = spawn(fn -> Subprocess.call(handle, {:write, "held"}, 1000) end)
-    eventually(fn -> Enum.any?(entries(table), &(:atomics.get(&1.phase, 1) == 1)) end)
+
+    eventually_observed(
+      "write entered execution before Actor kill",
+      fn ->
+        [{:budget, count, bytes, _sealed, _wake, pending}] = :ets.lookup(table, :budget)
+
+        %{
+          phases: pending |> Map.values() |> Enum.map(&:atomics.get(&1.phase, 1)) |> Enum.sort(),
+          pending_writes: count,
+          pending_write_bytes: bytes,
+          producer: Process.info(producer, [:status, :current_function])
+        }
+      end,
+      fn observation -> 1 in observation.phases end
+    )
+
     Process.exit(actor, :kill)
-    eventually(fn -> :ets.info(table) == :undefined end)
+
+    eventually_observed(
+      "Actor-owned admission table deleted",
+      fn -> %{table: :ets.info(table, :size), actor: Process.info(actor, :status)} end,
+      fn observation -> observation.table == :undefined end
+    )
+
     assert {:error, :guardian_timeout} = Subprocess.cleanup_receipt(handle)
     :ok = :sys.resume(guardian)
-    eventually(fn -> not Process.alive?(producer) end)
-    proven_receipt(handle)
+
+    eventually_observed(
+      "write producer terminated after Actor DOWN",
+      fn -> Process.info(producer, [:status, :current_function]) end,
+      &is_nil/1
+    )
+
+    eventually_observed(
+      "actual Guardian receipt certifies native cleanup after Actor DOWN",
+      fn ->
+        %{
+          receipt: Subprocess.cleanup_receipt(handle),
+          guardian: Process.info(guardian, :status)
+        }
+      end,
+      fn
+        %{
+          receipt: {:ok, %Receipt{direct_child: :reaped, targeted_group: group, helper_status: 0}}
+        }
+        when group in [:absent, :not_requested] ->
+          true
+
+        _ ->
+          false
+      end
+    )
+
     assert :ok = Subprocess.write(sibling, "unrelated\n")
     assert {:ok, "unrelated"} = FramedStream.next(sibling, 1000)
     close_proven(sibling)
@@ -439,6 +485,24 @@ defmodule Arbor.RPC.Subprocess.WriteAdmissionTest do
   defp wait_past(deadline) do
     if System.monotonic_time(:millisecond) <= deadline,
       do: Process.sleep(max(1, deadline - System.monotonic_time(:millisecond) + 1))
+  end
+
+  defp eventually_observed(label, observe, accepted),
+    do: eventually_observed(label, observe, accepted, System.monotonic_time(:millisecond) + 2000)
+
+  defp eventually_observed(label, observe, accepted, deadline) do
+    observation = observe.()
+
+    if accepted.(observation) do
+      :ok
+    else
+      assert System.monotonic_time(:millisecond) < deadline,
+             "#{label} did not become true; last observation: " <>
+               inspect(observation, limit: 24, printable_limit: 128)
+
+      Process.sleep(2)
+      eventually_observed(label, observe, accepted, deadline)
+    end
   end
 
   defp eventually(predicate),
