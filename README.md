@@ -1,7 +1,7 @@
 # Arbor.RPC
 
 Shared JSON-RPC, framing and environment mechanics for Arbor protocols.
-Version `2.0.0-dev` is unpublished. This isolated draft adds a source-built native
+Version `2.0.0-rc.1` is unpublished. This isolated draft adds a source-built native
 subprocess backend; canonical defaults have not changed.
 
 ## Native lifecycle contract
