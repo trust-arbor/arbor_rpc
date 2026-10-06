@@ -75,7 +75,7 @@ defmodule Arbor.RPC.MixProject do
       elixirc_paths: paths(Mix.env()),
       compilers: [:arbor_rpc_native] ++ Mix.compilers(),
       deps: deps(),
-      description: "Shared JSON-RPC, framing and environment mechanics for Arbor protocols.",
+      description: "ArborRPC: shared JSON-RPC, framing and environment mechanics.",
       package: [
         licenses: ["MIT"],
         links: %{"GitHub" => "https://github.com/trust-arbor/arbor_acp"},
@@ -83,7 +83,7 @@ defmodule Arbor.RPC.MixProject do
       ],
       source_url: "https://github.com/trust-arbor/arbor_acp",
       docs: [
-        name: "Arbor.RPC",
+        name: "ArborRPC",
         main: "readme",
         extras: ["README.md", "CHANGELOG.md"],
         source_ref: "arbor_rpc-v#{@version}",

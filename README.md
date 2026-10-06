@@ -1,6 +1,9 @@
-# Arbor.RPC
+# ArborRPC
 
-Shared JSON-RPC, framing and environment mechanics for Arbor protocols.
+ArborRPC provides shared JSON-RPC, framing and environment mechanics for ArborMCP
+and ArborACP. Its Hex package and OTP application are `arbor_rpc`, and its module
+namespace is `Arbor.RPC.*`.
+
 Version `2.0.0-rc.1` is an unpublished release candidate with a source-built native
 subprocess backend and unchanged bounded write defaults. The planned prerelease
 is for downstream migration testing; see the
