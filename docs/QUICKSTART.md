@@ -6,7 +6,7 @@ application, ArborMCP or ArborACP.
 
 ## Install the candidate
 
-Version `2.0.0-rc.1` is untagged and unpublished. For now, clone
+Version `1.0.0-rc.1` is untagged and unpublished. For now, clone
 `https://github.com/trust-arbor/arbor_rpc` beside your application and declare
 `{:arbor_rpc, path: "../arbor_rpc"}` in its dependencies. From the application,
 run `mix deps.get`, `mix compile`, then `iex -S mix` to try the examples below.
@@ -14,7 +14,7 @@ You can also run `iex -S mix` at the RPC repository root after fetching its
 dependencies.
 
 Once published, the equivalent reproducible Hex dependency is
-`{:arbor_rpc, "== 2.0.0-rc.1"}`. This does not assert current registry availability.
+`{:arbor_rpc, "== 1.0.0-rc.1"}`. This does not assert current registry availability.
 See [installation](../README.md#installation) and the
 [changelog](../CHANGELOG.md) before adopting the candidate.
 
@@ -135,3 +135,7 @@ Read the [lifetime contract](../README.md#native-lifecycle-contract) and
 [resource limits](../README.md#delivery-and-pressure) before building a persistent
 integration. If a command fails, use [troubleshooting](TROUBLESHOOTING.md).
 Maintainers can follow the [development and archive checks](DEVELOPMENT.md).
+
+Operational queue inspection uses `{:ok, statistics} = Subprocess.stats(handle)`
+or `{:error, reason}` when unavailable. `Subprocess.stats!/1` returns the map
+and raises on failure when that is the desired inspection policy.

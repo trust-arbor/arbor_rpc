@@ -39,8 +39,12 @@ defmodule Arbor.RPC.NativeGuardianTest do
     assert {:error, :write_too_large} =
              Subprocess.write(%{handle | max_write_bytes: 100}, "too large")
 
-    assert {:error, :write_too_large} = Subprocess.call(handle, {:write, "too large"})
-    assert {:error, :invalid_iodata} = Subprocess.call(handle, {:write, [:invalid]})
+    assert {:error, :write_too_large} =
+             Arbor.RPC.Subprocess.Internal.Call.call(handle, {:write, "too large"})
+
+    assert {:error, :invalid_iodata} =
+             Arbor.RPC.Subprocess.Internal.Call.call(handle, {:write, [:invalid]})
+
     assert Subprocess.connected?(handle)
     assert :ok = Subprocess.write(handle, "ok\n")
     assert {:ok, "ok"} = FramedStream.next(handle, 500)

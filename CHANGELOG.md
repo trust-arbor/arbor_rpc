@@ -1,8 +1,28 @@
 # Changelog
 
-## 2.0.0-rc.1 (planned)
+## Unreleased
 
-Release candidate for downstream migration testing; publication is pending.
+## 1.0.0-rc.1 — 2026-10-08
+
+- Ship agent usage rules in Hex archives and ExDoc, with downstream UsageRules
+  setup guidance and API-reference validation through the existing docs gate.
+- Return `{:ok, map} | {:error, reason}` from `Subprocess.stats/1`; add
+  `stats!/1` for explicit value-or-raise inspection. Queue fields and ownership
+  accounting are unchanged.
+
+- Remove generic actor `call/2,3` from the Subprocess facade. FramedStream and
+  write admission use an internal implementation owner, preserving generation,
+  deadlines, capacity, acknowledgement and cleanup checks.
+- Start independent 1.x versioning for this newly extracted package.
+- Preserve the published `2.0.0-rc.1` archive and tag; retire the superseded
+  candidate after the replacement is published and its installation verified.
+- Update installation, migration and release tooling for independent versions.
+
+## 2.0.0-rc.1 — 2026-10-06
+
+Published initial extraction candidate. Its 2.x version was a coordinated
+versioning mistake; this new library now starts its independent 1.x line.
+The existing release and tag remain available.
 
 - Provide neutral `Arbor.RPC.*` JSON-RPC, framing, environment isolation and
   subprocess ownership shared by MCP and ACP.

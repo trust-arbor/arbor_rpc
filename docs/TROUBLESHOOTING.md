@@ -10,7 +10,7 @@ explains their limits.
 
 | Symptom | Check |
 |---|---|
-| Hex cannot resolve `2.0.0-rc.1` | RC1 is currently unpublished. Use the standalone source checkout as a path dependency until publication. |
+| Hex cannot resolve `1.0.0-rc.1` | The replacement 1.0 RC is unpublished; the original 2.0.0-rc.1 remains available. Use the standalone source checkout as a path dependency until publication. |
 | Build says a C compiler is required | Install a compiler supporting C17 on macOS/Darwin or Linux. `CC` names one executable, such as `cc` or `/path/to/clang`; it is not a shell command or a flags list. |
 | Native helper build fails | Keep the compiler output and target OS/architecture. The fixed compiler flags include `-std=c17` and warnings-as-errors. Build source for the deployment target. |
 | `:native_helper_unavailable` | Verify the application was built normally and its installed `priv/native/arbor_rpc_subprocess` was included in the release. A source tar deliberately contains no prebuilt helper. |

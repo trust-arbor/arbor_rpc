@@ -152,7 +152,13 @@ defmodule Arbor.RPC.Subprocess.WriteAdmissionTest do
     producers =
       for id <- 1..32 do
         spawn_monitor(fn ->
-          result = Subprocess.call(handle, {:write, :binary.copy(<<id>>, 1_048_576)}, 500)
+          result =
+            Arbor.RPC.Subprocess.Internal.Call.call(
+              handle,
+              {:write, :binary.copy(<<id>>, 1_048_576)},
+              500
+            )
+
           send(parent, {:result, self(), result})
         end)
       end
@@ -191,7 +197,11 @@ defmodule Arbor.RPC.Subprocess.WriteAdmissionTest do
     :ok = :sys.suspend(actor)
 
     producers =
-      for _ <- 1..2, do: spawn(fn -> Subprocess.call(handle, {:write, "queued"}, 5000) end)
+      for _ <- 1..2,
+          do:
+            spawn(fn ->
+              Arbor.RPC.Subprocess.Internal.Call.call(handle, {:write, "queued"}, 5000)
+            end)
 
     eventually(fn -> WriteAdmission.stats(table).pending_writes == 2 end)
     assert {:error, :backpressure} = Subprocess.write(handle, "excess")
@@ -204,7 +214,11 @@ defmodule Arbor.RPC.Subprocess.WriteAdmissionTest do
     :ok = :sys.suspend(actor)
 
     for _ <- 1..40,
-        do: assert({:error, :timeout} = Subprocess.call(handle, {:write, "no late write"}, 2))
+        do:
+          assert(
+            {:error, :timeout} =
+              Arbor.RPC.Subprocess.Internal.Call.call(handle, {:write, "no late write"}, 2)
+          )
 
     assert WriteAdmission.stats(table).pending_writes == 0
     {:messages, messages} = Process.info(actor, :messages)
@@ -226,7 +240,12 @@ defmodule Arbor.RPC.Subprocess.WriteAdmissionTest do
     parent = self()
 
     producer =
-      spawn(fn -> send(parent, {:detached, Subprocess.call(handle, {:write, small}, 500)}) end)
+      spawn(fn ->
+        send(
+          parent,
+          {:detached, Arbor.RPC.Subprocess.Internal.Call.call(handle, {:write, small}, 500)}
+        )
+      end)
 
     eventually(fn -> WriteAdmission.stats(table).pending_writes == 1 end)
     [entry] = entries(table)
@@ -236,7 +255,9 @@ defmodule Arbor.RPC.Subprocess.WriteAdmissionTest do
     assert {:error, :write_too_large} =
              Subprocess.write(%{handle | max_write_bytes: 1_000_000}, source)
 
-    assert {:error, :invalid_iodata} = Subprocess.call(handle, {:write, [:invalid]})
+    assert {:error, :invalid_iodata} =
+             Arbor.RPC.Subprocess.Internal.Call.call(handle, {:write, [:invalid]})
+
     Process.exit(producer, :kill)
     :ok = :sys.resume(actor)
     eventually(fn -> WriteAdmission.stats(table).pending_writes == 0 end)
@@ -251,14 +272,20 @@ defmodule Arbor.RPC.Subprocess.WriteAdmissionTest do
 
     {producer, monitor} =
       spawn_monitor(fn ->
-        send(parent, {:expired, Subprocess.call(handle, {:write, "expired\n"}, 100)})
+        send(
+          parent,
+          {:expired, Arbor.RPC.Subprocess.Internal.Call.call(handle, {:write, "expired\n"}, 100)}
+        )
       end)
 
     eventually(fn -> Enum.any?(entries(table), &(:atomics.get(&1.phase, 1) == 1)) end)
     assert_receive {:expired, {:error, :timeout}}, 1000
     assert_receive {:DOWN, ^monitor, :process, ^producer, :normal}, 1000
     eventually(fn -> WriteAdmission.stats(table).uncertain_writes == 1 end)
-    assert {:error, :backpressure} = Subprocess.call(handle, {:write, "still charged"}, 100)
+
+    assert {:error, :backpressure} =
+             Arbor.RPC.Subprocess.Internal.Call.call(handle, {:write, "still charged"}, 100)
+
     :ok = :sys.resume(guardian)
     eventually(fn -> WriteAdmission.stats(table).pending_writes == 0 end)
     assert :sys.get_state(guardian).write_sequence == 0
@@ -272,7 +299,12 @@ defmodule Arbor.RPC.Subprocess.WriteAdmissionTest do
     {:ok, handle} = Subprocess.open(["/bin/cat"], max_pending_writes: 1)
     {_actor, guardian, table} = addresses(handle)
     :ok = :sys.suspend(guardian)
-    producer = spawn(fn -> Subprocess.call(handle, {:write, "abandoned\n"}, 1000) end)
+
+    producer =
+      spawn(fn ->
+        Arbor.RPC.Subprocess.Internal.Call.call(handle, {:write, "abandoned\n"}, 1000)
+      end)
+
     eventually(fn -> Enum.any?(entries(table), &(:atomics.get(&1.phase, 1) == 1)) end)
     Process.exit(producer, :kill)
     assert WriteAdmission.stats(table).pending_writes == 1
@@ -293,7 +325,7 @@ defmodule Arbor.RPC.Subprocess.WriteAdmissionTest do
 
     producer =
       spawn(fn ->
-        result = Subprocess.call(handle, {:write, "committed\n"}, 500)
+        result = Arbor.RPC.Subprocess.Internal.Call.call(handle, {:write, "committed\n"}, 500)
         send(parent, {:late_result, result, Process.info(self(), :messages)})
       end)
 
@@ -335,7 +367,11 @@ defmodule Arbor.RPC.Subprocess.WriteAdmissionTest do
 
     {producer, monitor} =
       spawn_monitor(fn ->
-        send(parent, {:physical_expired, Subprocess.call(handle, {:write, "physical\n"}, 200)})
+        send(
+          parent,
+          {:physical_expired,
+           Arbor.RPC.Subprocess.Internal.Call.call(handle, {:write, "physical\n"}, 200)}
+        )
       end)
 
     assert_receive {:actual_write_ack_held, ^guardian}, 1000
@@ -358,7 +394,9 @@ defmodule Arbor.RPC.Subprocess.WriteAdmissionTest do
     {actor, guardian, table} = addresses(handle)
     {:ok, sibling} = Subprocess.open(["/bin/cat"])
     :ok = :sys.suspend(guardian)
-    producer = spawn(fn -> Subprocess.call(handle, {:write, "held"}, 1000) end)
+
+    producer =
+      spawn(fn -> Arbor.RPC.Subprocess.Internal.Call.call(handle, {:write, "held"}, 1000) end)
 
     eventually_observed(
       "write entered execution before Actor kill",

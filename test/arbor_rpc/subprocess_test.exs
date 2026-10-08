@@ -12,6 +12,15 @@ defmodule Arbor.RPC.SubprocessTest do
     {:ok, directory: directory}
   end
 
+  test "statistics use tagged operational results and explicit bang inspection" do
+    handle = shell("sleep 1")
+    assert {:ok, %{frames: 0}} = Subprocess.stats(handle)
+    assert %{frames: 0} = Subprocess.stats!(handle)
+    assert :ok = Subprocess.close(handle)
+    assert {:error, _reason} = Subprocess.stats(handle)
+    assert_raise RuntimeError, fn -> Subprocess.stats!(handle) end
+  end
+
   test "lookup uses the child's PATH and cd, with no host fallback", %{directory: directory} do
     executable = Path.join(directory, "fixture")
     File.write!(executable, "#!/bin/sh\nprintf 'child\\n'\n")
@@ -52,7 +61,7 @@ defmodule Arbor.RPC.SubprocessTest do
 
   test "prebuffered frames drain, aggregate chunks may exceed a frame cap, UTF-8 splits preserve bytes" do
     handle = shell("printf 'abcd\\nefgh\\n'; sleep 1", max_frame_bytes: 4)
-    eventually(fn -> Subprocess.stats(handle).frames == 2 end)
+    eventually(fn -> Subprocess.stats!(handle).frames == 2 end)
     assert {:ok, "abcd"} = FramedStream.next(handle, 0)
     assert {:ok, "efgh"} = FramedStream.next(handle, 0)
     assert :ok = Subprocess.close(handle)
@@ -195,7 +204,7 @@ defmodule Arbor.RPC.SubprocessTest do
 
   test "count and aggregate bytes reject pressure while preserving accepted prefix" do
     handle = shell("printf 'a\\nb\\nc\\n'; sleep 1", max_queue_frames: 2)
-    eventually(fn -> Subprocess.stats(handle).closed end)
+    eventually(fn -> Subprocess.stats!(handle).closed end)
     assert {:ok, "a"} = FramedStream.next(handle, 0)
     assert {:ok, "b"} = FramedStream.next(handle, 0)
     assert {:closed, :queue_frame_limit, ""} = FramedStream.next(handle, 0)
@@ -211,7 +220,7 @@ defmodule Arbor.RPC.SubprocessTest do
     assert :ok = FramedStream.subscribe(handle, self(), window: 1)
     assert_receive {:arbor_rpc, ^generation, {:frame, first, "one"}}, 500
     refute_receive {:arbor_rpc, ^generation, {:frame, _, _}}, 30
-    assert %{frames: 3, inflight: 1, queued: 2, bytes: 11} = Subprocess.stats(handle)
+    assert %{frames: 3, inflight: 1, queued: 2, bytes: 11} = Subprocess.stats!(handle)
     task = Task.async(fn -> FramedStream.ack(handle, first) end)
     assert {:error, :not_consumer} = Task.await(task)
     assert {:error, :invalid_ack} = FramedStream.ack(handle, make_ref())
@@ -232,8 +241,8 @@ defmodule Arbor.RPC.SubprocessTest do
     generation = Subprocess.identity(handle)
     assert :ok = FramedStream.subscribe(handle, self())
     assert_receive {:arbor_rpc, ^generation, {:frame, first, "a"}}, 500
-    eventually(fn -> Subprocess.stats(handle).closed end)
-    assert %{frames: 2, inflight: 1, queued: 1} = Subprocess.stats(handle)
+    eventually(fn -> Subprocess.stats!(handle).closed end)
+    assert %{frames: 2, inflight: 1, queued: 1} = Subprocess.stats!(handle)
     assert :ok = FramedStream.ack(handle, first)
     assert_receive {:arbor_rpc, ^generation, {:frame, second, "b"}}, 500
     assert :ok = FramedStream.ack(handle, second)
@@ -244,9 +253,9 @@ defmodule Arbor.RPC.SubprocessTest do
     handle = shell("sleep 0.15; printf 'late\\n'; sleep 1")
     assert {:error, :timeout} = FramedStream.next(handle, 20)
     task = Task.async(fn -> FramedStream.next(handle, 500) end)
-    eventually(fn -> Subprocess.stats(handle).waiters == 1 end)
+    eventually(fn -> Subprocess.stats!(handle).waiters == 1 end)
     Task.shutdown(task, :brutal_kill)
-    eventually(fn -> Subprocess.stats(handle).waiters == 0 end)
+    eventually(fn -> Subprocess.stats!(handle).waiters == 0 end)
     assert {:ok, "late"} = FramedStream.next(handle, 500)
   end
 
@@ -279,7 +288,7 @@ defmodule Arbor.RPC.SubprocessTest do
     assert Process.alive?(reader)
     Process.sleep(150)
     :erlang.resume_process(actor)
-    eventually(fn -> Subprocess.stats(handle).frames == 1 end)
+    eventually(fn -> Subprocess.stats!(handle).frames == 1 end)
     assert {:ok, "late"} = FramedStream.next(handle, 0)
   end
 
@@ -301,19 +310,19 @@ defmodule Arbor.RPC.SubprocessTest do
 
   test "an absolute filter deadline cannot turn into a fresh poll of queued frames" do
     handle = shell("printf 'banner\\nlate\\n'; sleep 1")
-    eventually(fn -> Subprocess.stats(handle).frames == 2 end)
+    eventually(fn -> Subprocess.stats!(handle).frames == 2 end)
     deadline = System.monotonic_time(:millisecond) + 200
     assert {:ok, "banner"} = FramedStream.next_until(handle, deadline)
     Process.sleep(220)
     assert {:error, :timeout} = FramedStream.next_until(handle, deadline)
-    assert %{frames: 1} = Subprocess.stats(handle)
+    assert %{frames: 1} = Subprocess.stats!(handle)
     assert {:ok, "late"} = FramedStream.next(handle, 0)
     assert {:error, :invalid_deadline} = FramedStream.next_until(handle, :invalid)
   end
 
   test "actor scheduling past an absolute deadline leaves prebuffered output available" do
     handle = shell("printf 'buffered\\n'; sleep 1")
-    eventually(fn -> Subprocess.stats(handle).frames == 1 end)
+    eventually(fn -> Subprocess.stats!(handle).frames == 1 end)
     actor = hd(Subprocess.linked_processes(handle))
     :erlang.suspend_process(actor)
     parent = self()
@@ -341,22 +350,22 @@ defmodule Arbor.RPC.SubprocessTest do
     assert_receive {:absolute_result, {:error, :timeout}}, 150
     assert Process.alive?(reader)
     :erlang.resume_process(actor)
-    assert %{frames: 1} = Subprocess.stats(handle)
+    assert %{frames: 1} = Subprocess.stats!(handle)
     assert {:ok, "buffered"} = FramedStream.next_until(handle, :infinity)
   end
 
   test "filtering an original zero poll excludes frames buffered after its cutoff" do
     handle = shell("read first; printf 'banner\\n'; read second; printf 'later\\n'; sleep 1")
     assert :ok = Subprocess.write(handle, "first\n")
-    eventually(fn -> Subprocess.stats(handle).frames == 1 end)
+    eventually(fn -> Subprocess.stats!(handle).frames == 1 end)
     cutoff = System.monotonic_time(:millisecond)
     Process.sleep(20)
     assert :ok = Subprocess.write(handle, "second\n")
-    eventually(fn -> Subprocess.stats(handle).frames == 2 end)
+    eventually(fn -> Subprocess.stats!(handle).frames == 2 end)
 
     assert {:ok, "banner"} = FramedStream.next_until(handle, cutoff, buffered_only: true)
     assert {:error, :timeout} = FramedStream.next_until(handle, cutoff, buffered_only: true)
-    assert %{frames: 1} = Subprocess.stats(handle)
+    assert %{frames: 1} = Subprocess.stats!(handle)
     assert {:ok, "later"} = FramedStream.next(handle, 0)
 
     assert {:error, :invalid_deadline} =
@@ -368,7 +377,7 @@ defmodule Arbor.RPC.SubprocessTest do
 
   test "an expired nonblocking poll cannot steal a prebuffered frame" do
     handle = shell("printf 'buffered\\n'; sleep 1")
-    eventually(fn -> Subprocess.stats(handle).frames == 1 end)
+    eventually(fn -> Subprocess.stats!(handle).frames == 1 end)
     actor = hd(Subprocess.linked_processes(handle))
     :erlang.suspend_process(actor)
     parent = self()
@@ -395,7 +404,7 @@ defmodule Arbor.RPC.SubprocessTest do
     assert_receive {:poll_result, {:error, :timeout}}, 100
     assert Process.alive?(reader)
     :erlang.resume_process(actor)
-    assert %{frames: 1} = Subprocess.stats(handle)
+    assert %{frames: 1} = Subprocess.stats!(handle)
     assert {:ok, "buffered"} = FramedStream.next(handle, 0)
   end
 
@@ -425,11 +434,11 @@ defmodule Arbor.RPC.SubprocessTest do
   test "waiters have a finite count and pull/push modes are exclusive" do
     handle = shell("sleep 1", max_waiters: 1)
     task = Task.async(fn -> FramedStream.next(handle, 500) end)
-    eventually(fn -> Subprocess.stats(handle).waiters == 1 end)
+    eventually(fn -> Subprocess.stats!(handle).waiters == 1 end)
     assert {:error, :waiter_limit} = FramedStream.next(handle, 10)
     assert {:error, :readers_waiting} = FramedStream.subscribe(handle, self())
     Task.shutdown(task, :brutal_kill)
-    eventually(fn -> Subprocess.stats(handle).waiters == 0 end)
+    eventually(fn -> Subprocess.stats!(handle).waiters == 0 end)
     assert :ok = FramedStream.subscribe(handle, self())
     assert {:error, :subscribed} = FramedStream.next(handle, 10)
     assert {:error, :already_subscribed} = FramedStream.subscribe(handle, self())

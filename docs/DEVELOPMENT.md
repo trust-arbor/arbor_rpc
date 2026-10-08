@@ -80,9 +80,9 @@ publishable manifest with local dependency overrides unset:
 mkdir archive-consumer-input
 MIX_ENV=prod mix deps.get --only prod
 MIX_ENV=prod mix hex.build \
-  --output archive-consumer-input/arbor_rpc-2.0.0-rc.1.tar
+  --output archive-consumer-input/arbor_rpc-1.0.0-rc.1.tar
 python3 scripts/check_archive_consumer.py archive-consumer-input \
-  --expected-version 2.0.0-rc.1 \
+  --expected-version 1.0.0-rc.1 \
   --report _verification/rpc-archive-consumer.json
 ```
 

@@ -59,7 +59,9 @@ defmodule Arbor.RPC.Subprocess do
   this release does not require a Windows backend.
   """
 
-  alias Arbor.RPC.Subprocess.{Actor, Guardian, Receipt, WriteAdmission}
+  alias Arbor.RPC.Subprocess.{Actor, Guardian, Receipt}
+
+  alias Arbor.RPC.Subprocess.Internal.Call
 
   @enforce_keys [:pid, :guardian, :generation, :cleanup_timeout, :max_write_bytes]
   defstruct [:pid, :guardian, :generation, :cleanup_timeout, :max_write_bytes]
@@ -172,7 +174,7 @@ defmodule Arbor.RPC.Subprocess do
   are synchronous cooperative work, not a hard CPU/RSS scheduling guarantee.
   """
   @spec write(t(), iodata()) :: :ok | {:error, term()}
-  def write(%__MODULE__{} = handle, data), do: call(handle, {:write, data})
+  def write(%__MODULE__{} = handle, data), do: Call.call(handle, {:write, data})
 
   @doc """
   Closes the child within its finite budget; repeated close is safe.
@@ -186,7 +188,7 @@ defmodule Arbor.RPC.Subprocess do
   def close(nil), do: :ok
 
   def close(%__MODULE__{} = handle) do
-    case validate_actor(handle) do
+    case Call.validate_actor(handle) do
       :ok -> close_actor(handle)
       {:error, :closed} -> close_guardian(handle)
       error -> error
@@ -194,9 +196,9 @@ defmodule Arbor.RPC.Subprocess do
   end
 
   defp close_actor(handle) do
-    case call(handle, :close) do
+    case Call.call(handle, :close) do
       {:error, :timeout} = error ->
-        if validate_actor(handle) == :ok, do: Process.exit(handle.pid, :kill)
+        if Call.validate_actor(handle) == :ok, do: Process.exit(handle.pid, :kill)
         error
 
       {:error, :closed} ->
@@ -245,46 +247,13 @@ defmodule Arbor.RPC.Subprocess do
 
   defp validate_guardian(_handle), do: {:error, :invalid_guardian_identity}
 
-  defp validate_actor(%__MODULE__{pid: pid, generation: generation}) when is_pid(pid) do
-    if node(pid) == node() do
-      case Process.info(pid, [:initial_call, :dictionary]) do
-        nil ->
-          {:error, :closed}
-
-        [initial_call: {:proc_lib, :init_p, 5}, dictionary: dictionary] ->
-          validate_actor_dictionary(dictionary, generation)
-
-        _other_process ->
-          {:error, :invalid_handle}
-      end
-    else
-      {:error, :remote_handle_not_supported}
-    end
-  end
-
-  defp validate_actor(_handle), do: {:error, :invalid_handle}
-
-  defp validate_actor_dictionary(dictionary, generation) do
-    case List.keyfind(dictionary, :"$initial_call", 0) do
-      {:"$initial_call", {Actor, :init, 1}} ->
-        expected = {{Actor, :generation}, generation}
-
-        if List.keyfind(dictionary, {Actor, :generation}, 0) == expected,
-          do: :ok,
-          else: {:error, :stale_generation}
-
-      _ ->
-        {:error, :invalid_handle}
-    end
-  end
-
   @spec connected?(t()) :: boolean()
-  def connected?(handle), do: call(handle, :connected?) == true
+  def connected?(handle), do: Call.call(handle, :connected?) == true
 
   @doc "The owned child's OS PID for diagnostics, or nil after the actor stops."
   @spec os_pid(t()) :: pos_integer() | nil
   def os_pid(handle) do
-    case call(handle, :os_pid) do
+    case Call.call(handle, :os_pid) do
       pid when is_integer(pid) and pid > 0 -> pid
       _ -> nil
     end
@@ -295,50 +264,23 @@ defmodule Arbor.RPC.Subprocess do
   def linked_processes(%__MODULE__{pid: pid}), do: [pid]
 
   @doc "Queue diagnostics; excludes asynchronous Port driver messages."
-  @spec stats(t()) :: map() | {:error, term()}
-  def stats(handle), do: call(handle, :stats)
-
-  @doc false
-  @spec call(t(), term(), timeout() | nil) :: term()
-  def call(handle, request, timeout \\ nil)
-
-  def call(%__MODULE__{cleanup_timeout: budget} = handle, {:write, data}, timeout) do
-    timeout = if is_nil(timeout), do: budget + 1000, else: timeout
-
-    deadline =
-      if timeout == :infinity, do: :infinity, else: System.monotonic_time(:millisecond) + timeout
-
-    with :ok <- validate_actor(handle),
-         {:ok, table} <- write_table(handle) do
-      WriteAdmission.submit(table, handle.pid, handle.generation, data, deadline)
+  @spec stats(t()) :: {:ok, map()} | {:error, term()}
+  def stats(handle) do
+    case Call.call(handle, :stats) do
+      value when is_map(value) -> {:ok, value}
+      {:error, _reason} = error -> error
     end
   end
 
-  def call(
-        %__MODULE__{pid: pid, generation: generation, cleanup_timeout: budget},
-        request,
-        timeout
-      ) do
-    timeout = if is_nil(timeout), do: budget + 1000, else: timeout
+  @doc "Returns queue diagnostics, raising if the handle is unavailable."
+  @spec stats!(t()) :: map()
+  def stats!(handle) do
+    case stats(handle) do
+      {:ok, value} ->
+        value
 
-    if node(pid) == node(),
-      do: GenServer.call(pid, {generation, request}, timeout),
-      else: {:error, :remote_handle_not_supported}
-  catch
-    :exit, {:timeout, _} -> {:error, :timeout}
-    :exit, _ -> {:error, :closed}
-  end
-
-  defp write_table(handle) do
-    case Process.info(handle.pid, :dictionary) do
-      {:dictionary, dictionary} ->
-        case List.keyfind(dictionary, {Actor, :writes}, 0) do
-          {{Actor, :writes}, table} -> {:ok, table}
-          _ -> {:error, :closed}
-        end
-
-      nil ->
-        {:error, :closed}
+      {:error, reason} ->
+        raise RuntimeError, "subprocess statistics unavailable: #{inspect(reason)}"
     end
   end
 end
