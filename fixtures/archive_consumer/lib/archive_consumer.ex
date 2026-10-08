@@ -3,9 +3,12 @@ defmodule ArchiveConsumer do
 
   def probe do
     {:ok, _} = Application.ensure_all_started(:archive_consumer)
-    expected_version = System.fetch_env!("ARCHIVE_EXPECTED_VERSION")
 
     for app <- [:arbor_rpc] do
+      expected_version =
+        System.get_env("ARCHIVE_EXPECTED_VERSION_#{String.upcase(Atom.to_string(app))}") ||
+          System.fetch_env!("ARCHIVE_EXPECTED_VERSION")
+
       ^expected_version = app |> Application.spec(:vsn) |> to_string()
     end
 

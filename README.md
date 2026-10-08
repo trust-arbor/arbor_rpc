@@ -9,7 +9,10 @@ MCP consume it as an independent dependency. The extraction preserved 18 RPC
 commits; `SOURCE_SNAPSHOT` records its ACP source revision and identical initial
 subtree. Repository integration changes do not replace that source lineage.
 
-Version `2.0.0-rc.1` is an unpublished release candidate with a source-built native
+The original `2.0.0-rc.1` is published on Hex. This checkout corrects the
+new package to its independent 1.x line; existing releases and tags are preserved.
+
+Version `1.0.0-rc.1` is an unpublished release candidate with a source-built native
 subprocess backend and unchanged bounded write defaults. The planned prerelease
 is for downstream migration testing; see the
 [v1 to v2 migration guide](https://github.com/trust-arbor/arbor_mcp/blob/codex/v2-migration/docs/guides/MIGRATING_V1_TO_V2.md).
@@ -38,7 +41,7 @@ that helper without a runtime compiler. Windows native subprocess operations
 are unsupported. See [source build requirements](#source-build-and-remaining-gates)
 for the platform and cleanup limits.
 
-While RC1 is unpublished, clone the standalone repository and use its root as a
+While the replacement 1.0 RC is unpublished, clone the standalone repository and use its root as a
 local dependency:
 
 ```elixir
@@ -51,14 +54,14 @@ Then run `mix deps.get` and `mix compile` in the consuming project. Record the
 checkout's Git revision when sharing results. RPC itself needs no ACP/MCP
 checkout or `ARBOR_RPC_PATH` setting.
 
-Once RC1 is published, replace the path dependency with an exact Hex pin:
+Once the replacement 1.0 RC is published, replace the path dependency with an exact Hex pin:
 
 ```elixir
-{:arbor_rpc, "== 2.0.0-rc.1"}
+{:arbor_rpc, "== 1.0.0-rc.1"}
 ```
 
 That Hex example describes the future published candidate; it does not imply
-the package or its `v2.0.0-rc.1` tag exists today. Review your resolved lockfile
+the package or its `v1.0.0-rc.1` tag exists today. Review your resolved lockfile
 and rebuild your application after changing dependency sources.
 
 ## Public API map
@@ -250,7 +253,7 @@ MIX_ENV=test mix deps.compile
 mix test --warnings-as-errors --no-deps-check
 elixir scripts/check_boundaries.exs
 mix hex.build
-python3 scripts/check_archive_consumer.py . --expected-version 2.0.0-rc.1
+python3 scripts/check_archive_consumer.py . --expected-version 1.0.0-rc.1
 ```
 
 The archive check unpacks exactly one RPC source archive into a fresh consumer,
