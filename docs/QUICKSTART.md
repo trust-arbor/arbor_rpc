@@ -135,3 +135,7 @@ Read the [lifetime contract](../README.md#native-lifecycle-contract) and
 [resource limits](../README.md#delivery-and-pressure) before building a persistent
 integration. If a command fails, use [troubleshooting](TROUBLESHOOTING.md).
 Maintainers can follow the [development and archive checks](DEVELOPMENT.md).
+
+Operational queue inspection uses `{:ok, statistics} = Subprocess.stats(handle)`
+or `{:error, reason}` when unavailable. `Subprocess.stats!/1` returns the map
+and raises on failure when that is the desired inspection policy.

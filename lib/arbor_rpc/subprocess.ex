@@ -264,6 +264,23 @@ defmodule Arbor.RPC.Subprocess do
   def linked_processes(%__MODULE__{pid: pid}), do: [pid]
 
   @doc "Queue diagnostics; excludes asynchronous Port driver messages."
-  @spec stats(t()) :: map() | {:error, term()}
-  def stats(handle), do: Call.call(handle, :stats)
+  @spec stats(t()) :: {:ok, map()} | {:error, term()}
+  def stats(handle) do
+    case Call.call(handle, :stats) do
+      value when is_map(value) -> {:ok, value}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  @doc "Returns queue diagnostics, raising if the handle is unavailable."
+  @spec stats!(t()) :: map()
+  def stats!(handle) do
+    case stats(handle) do
+      {:ok, value} ->
+        value
+
+      {:error, reason} ->
+        raise RuntimeError, "subprocess statistics unavailable: #{inspect(reason)}"
+    end
+  end
 end

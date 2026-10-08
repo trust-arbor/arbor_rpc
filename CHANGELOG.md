@@ -2,6 +2,10 @@
 
 ## 1.0.0-rc.1 (unreleased)
 
+- Return `{:ok, map} | {:error, reason}` from `Subprocess.stats/1`; add
+  `stats!/1` for explicit value-or-raise inspection. Queue fields and ownership
+  accounting are unchanged.
+
 - Remove generic actor `call/2,3` from the Subprocess facade. FramedStream and
   write admission use an internal implementation owner, preserving generation,
   deadlines, capacity, acknowledgement and cleanup checks.
