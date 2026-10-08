@@ -22,19 +22,20 @@ defmodule Arbor.RPC.FramedStream do
   """
 
   alias Arbor.RPC.Subprocess
+  alias Arbor.RPC.Subprocess.Internal.Call
 
   @spec next(Subprocess.t(), timeout()) ::
           {:ok, binary()} | {:closed, term(), binary()} | {:error, term()}
   def next(handle, timeout \\ :infinity)
 
   def next(handle, :infinity),
-    do: Subprocess.call(handle, {:next, :infinity, :infinity, false}, :infinity)
+    do: Call.call(handle, {:next, :infinity, :infinity, false}, :infinity)
 
   def next(handle, timeout) when is_integer(timeout) and timeout >= 0 do
     deadline = System.monotonic_time(:millisecond) + timeout
     # The small call allowance is for actor scheduling/reply delivery, not an
     # extension of the frame deadline. Zero only drains prebuffered frames.
-    Subprocess.call(handle, {:next, deadline, deadline + 10, timeout == 0}, max(timeout, 1) + 10)
+    Call.call(handle, {:next, deadline, deadline + 10, timeout == 0}, max(timeout, 1) + 10)
   end
 
   def next(_handle, _timeout), do: {:error, :invalid_timeout}
@@ -68,14 +69,14 @@ defmodule Arbor.RPC.FramedStream do
 
   defp read_until(handle, cutoff, true) when is_integer(cutoff) do
     acceptance = System.monotonic_time(:millisecond) + 10
-    Subprocess.call(handle, {:next, cutoff, acceptance, true}, 11)
+    Call.call(handle, {:next, cutoff, acceptance, true}, 11)
   end
 
   defp read_until(handle, deadline, false) when is_integer(deadline) do
     remaining = deadline - System.monotonic_time(:millisecond)
 
     if remaining > 0 do
-      Subprocess.call(handle, {:next, deadline, deadline + 10, false}, remaining + 10)
+      Call.call(handle, {:next, deadline, deadline + 10, false}, remaining + 10)
     else
       {:error, :timeout}
     end
@@ -85,8 +86,8 @@ defmodule Arbor.RPC.FramedStream do
 
   @spec subscribe(Subprocess.t(), pid(), keyword()) :: :ok | {:error, term()}
   def subscribe(handle, consumer, opts \\ []),
-    do: Subprocess.call(handle, {:subscribe, consumer, Keyword.get(opts, :window, 1)})
+    do: Call.call(handle, {:subscribe, consumer, Keyword.get(opts, :window, 1)})
 
   @spec ack(Subprocess.t(), reference()) :: :ok | {:error, term()}
-  def ack(handle, token), do: Subprocess.call(handle, {:ack, token})
+  def ack(handle, token), do: Call.call(handle, {:ack, token})
 end

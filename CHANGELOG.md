@@ -2,6 +2,9 @@
 
 ## 1.0.0-rc.1 (unreleased)
 
+- Remove generic actor `call/2,3` from the Subprocess facade. FramedStream and
+  write admission use an internal implementation owner, preserving generation,
+  deadlines, capacity, acknowledgement and cleanup checks.
 - Start independent 1.x versioning for this newly extracted package.
 - Preserve the published `2.0.0-rc.1` archive and tag; retire the superseded
   candidate after the replacement is published and its installation verified.
