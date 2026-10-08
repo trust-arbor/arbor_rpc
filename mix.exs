@@ -80,13 +80,15 @@ defmodule Arbor.RPC.MixProject do
       package: [
         licenses: ["MIT"],
         links: %{"GitHub" => "https://github.com/trust-arbor/arbor_rpc"},
-        files: ~w(lib c_src docs mix.exs .formatter.exs README.md LICENSE CHANGELOG.md)
+        files:
+          ~w(lib c_src docs mix.exs .formatter.exs README.md usage-rules.md LICENSE CHANGELOG.md)
       ],
       source_url: "https://github.com/trust-arbor/arbor_rpc",
       docs: [
         main: "readme",
         extras: [
           "README.md",
+          {"usage-rules.md", title: "Agent usage rules"},
           "docs/QUICKSTART.md",
           "docs/TROUBLESHOOTING.md",
           "docs/DEVELOPMENT.md",

@@ -64,6 +64,22 @@ That Hex example describes the future published candidate; it does not imply
 the package or its `v1.0.0-rc.1` tag exists today. Review your resolved lockfile
 and rebuild your application after changing dependency sources.
 
+## AI agent guidance
+
+The package ships [usage rules](usage-rules.md) for supported APIs, subprocess
+ownership, deadlines, framing and cleanup. They are also an ExDoc guide.
+Downstream projects with [UsageRules](https://usage-rules.hexdocs.pm/readme.html)
+installed as optional development tooling can add this to their `mix.exs`
+project configuration:
+
+```elixir
+usage_rules: [file: "AGENTS.md", usage_rules: [:arbor_rpc]]
+```
+
+Then run `mix usage_rules.sync`. Add other Arbor packages you use to the list.
+UsageRules 1.2 requires Elixir 1.18 or newer; shipping these rules adds no
+dependency and preserves ArborRPC's Elixir 1.17 minimum.
+
 ## Public API map
 
 | Module | Use |
