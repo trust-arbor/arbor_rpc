@@ -1,6 +1,8 @@
 # Changelog
 
-## 1.0.0-rc.1 (unreleased)
+## Unreleased
+
+## 1.0.0-rc.1 — 2026-10-08
 
 - Ship agent usage rules in Hex archives and ExDoc, with downstream UsageRules
   setup guidance and API-reference validation through the existing docs gate.
