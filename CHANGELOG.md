@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Refresh published-RC installation guidance and consolidate current documentation.
+
+
 ## 1.0.0-rc.1 — 2026-10-08
 
 - Ship agent usage rules in Hex archives and ExDoc, with downstream UsageRules
@@ -33,7 +36,7 @@ The existing release and tag remain available.
 - Fix the private write-publication race: after claiming a write, reload its
   published binary and verify the same phase, producer and original deadline.
   Keep existing count/byte limits and uncertain-outcome accounting unchanged.
-- Document the dependency split in the [v1 to v2 migration guide](https://github.com/trust-arbor/arbor_mcp/blob/codex/v2-migration/docs/guides/MIGRATING_V1_TO_V2.md).
+- Document the dependency split in the [v1 to v2 migration guide](https://github.com/trust-arbor/arbor_mcp/blob/master/docs/guides/MIGRATING_V1_TO_V2.md).
 - Extract the RPC project to its own repository with its existing history, root
   `v<version>` source links, independent BEAM CI and source-archive checks.
 - Ship public-API quickstart, troubleshooting and development guides alongside

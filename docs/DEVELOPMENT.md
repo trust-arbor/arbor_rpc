@@ -108,7 +108,7 @@ RC, publish RPC before the dependent protocol packages. Version/tag/archive
 identity and actual registry installation must agree; archive checks perform
 no publication or tagging.
 
-RC1 is currently untagged and unpublished. Stable qualification, including the
+RC1 is published and tagged as `v1.0.0-rc.1`. Stable qualification, including the
 accepted continuous 48-hour gate, remains incomplete and no soak is active.
 Keep that status separate from successful local tests, short rehearsals and
 CI runs. Public defaults and finite resource/cleanup guarantees remain part of
