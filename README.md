@@ -9,14 +9,11 @@ MCP consume it as an independent dependency. The extraction preserved 18 RPC
 commits; `SOURCE_SNAPSHOT` records its ACP source revision and identical initial
 subtree. Repository integration changes do not replace that source lineage.
 
-The original `2.0.0-rc.1` is published on Hex. This checkout corrects the
-new package to its independent 1.x line; existing releases and tags are preserved.
-
-Version `1.0.0-rc.1` is an unpublished release candidate with a source-built native
-subprocess backend and unchanged bounded write defaults. The planned prerelease
-is for downstream migration testing; see the
-[v1 to v2 migration guide](https://github.com/trust-arbor/arbor_mcp/blob/codex/v2-migration/docs/guides/MIGRATING_V1_TO_V2.md).
-Publication is pending, and the final 48-hour stable-release gate has not passed.
+Version `1.0.0-rc.1` is published for downstream migration testing, with a
+source-built native subprocess backend. The original `2.0.0-rc.1` is retired;
+its archive and tag remain available. Stable promotion requires the remaining
+qualification and continuous 48-hour soak. See the
+[ExMCP migration guide](https://github.com/trust-arbor/arbor_mcp/blob/master/docs/guides/MIGRATING_V1_TO_V2.md).
 
 ## Start here
 
@@ -41,28 +38,18 @@ that helper without a runtime compiler. Windows native subprocess operations
 are unsupported. See [source build requirements](#source-build-and-remaining-gates)
 for the platform and cleanup limits.
 
-While the replacement 1.0 RC is unpublished, clone the standalone repository and use its root as a
-local dependency:
+Install the published RC with a reproducible Hex dependency:
 
 ```elixir
 defp deps do
-  [{:arbor_rpc, path: "../arbor_rpc"}]
+  [{:arbor_rpc, "== 1.0.0-rc.1"}]
 end
 ```
 
-Then run `mix deps.get` and `mix compile` in the consuming project. Record the
-checkout's Git revision when sharing results. RPC itself needs no ACP/MCP
-checkout or `ARBOR_RPC_PATH` setting.
-
-Once the replacement 1.0 RC is published, replace the path dependency with an exact Hex pin:
-
-```elixir
-{:arbor_rpc, "== 1.0.0-rc.1"}
-```
-
-That Hex example describes the future published candidate; it does not imply
-the package or its `v1.0.0-rc.1` tag exists today. Review your resolved lockfile
-and rebuild your application after changing dependency sources.
+Run `mix deps.get`. For source development, clone the default `main` branch and
+optionally use `{:arbor_rpc, path: "../arbor_rpc"}`. JSON-RPC/framing starts no
+native process, while source installation still builds the helper on supported
+platforms.
 
 ## AI agent guidance
 
@@ -235,7 +222,7 @@ policy does not certify every Darwin/Linux architecture: advertise only the
 matrix qualified from final source archives and installed releases. Broader
 platform/pressure measurement, helper hard death and uninterruptible child exit
 remain qualification gates. Escaped descendants remain outside the native
-ownership contract. The local candidate is not a published release.
+ownership contract. Stable qualification remains incomplete; the RC is available for testing.
 
 ## Standalone documentation
 
@@ -249,8 +236,8 @@ MIX_ENV=dev mix docs --warnings-as-errors
 ExDoc is a dev-only dependency and does not run in consumer applications. Source
 links use `v<version>` in `trust-arbor/arbor_rpc`, with repository-root source
 paths.
-Version tags are created only for a reviewed release; this unpublished prerelease
-snapshot does not imply that those prospective tags already exist.
+The published candidate uses the owning `v1.0.0-rc.1` tag. New versions require
+their own reviewed source and fresh tag.
 
 
 ## Development and source-archive checks
