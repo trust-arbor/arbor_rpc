@@ -6,9 +6,9 @@ source archives on these explicit, compatible pairs:
 | Elixir | Erlang/OTP | Purpose |
 |---|---|---|
 | 1.17.3 | 27.0 | Retained minimum and formatting baseline |
-| 1.18.5 | 27.3.4.18 | Elixir 1.18 compatibility |
-| 1.19.6 | 28.5.0.7 | Elixir 1.19 compatibility |
-| 1.20.4 | 29.1.1 | Elixir 1.20 compatibility |
+| 1.18.5 | 27.3.4.19 | Elixir 1.18 compatibility |
+| 1.19.6 | 28.5.0.8 | Elixir 1.19 compatibility |
+| 1.20.4 | 29.1.2 | Elixir 1.20 compatibility |
 
 Dependencies compile separately before the package's warnings-as-errors gate
 in both development and test environments. Formatting runs only on the minimum
