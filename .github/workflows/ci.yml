@@ -16,9 +16,9 @@ jobs:
         package: [arbor_rpc]
         toolchain:
           - {elixir: '1.17.3', otp: '27.0'}
-          - {elixir: '1.18.5', otp: '27.3.4.18'}
-          - {elixir: '1.19.6', otp: '28.5.0.7'}
-          - {elixir: '1.20.4', otp: '29.1.1'}
+          - {elixir: '1.18.5', otp: '27.3.4.19'}
+          - {elixir: '1.19.6', otp: '28.5.0.8'}
+          - {elixir: '1.20.4', otp: '29.1.2'}
     defaults:
       run:
         working-directory: .
@@ -54,7 +54,7 @@ jobs:
           name: ${{ matrix.package }}-${{ matrix.toolchain.elixir }}
           path: ./*.tar
   native_macos:
-    name: macOS native package and archive / Elixir 1.19.6 / OTP 28.5.0.7
+    name: macOS native package and archive / Elixir 1.19.6 / OTP 28.5.0.8
     # setup-beam supports macOS 15 on both runner architectures with OTP 28.
     runs-on: macos-15
     timeout-minutes: 20
@@ -67,7 +67,7 @@ jobs:
           persist-credentials: false
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124
         with:
-          otp-version: '28.5.0.7'
+          otp-version: '28.5.0.8'
           elixir-version: '1.19.6'
           version-type: strict
       - name: Record native build toolchain
@@ -114,9 +114,9 @@ jobs:
       matrix:
         toolchain:
           - {elixir: '1.17.3', otp: '27.0'}
-          - {elixir: '1.18.5', otp: '27.3.4.18'}
-          - {elixir: '1.19.6', otp: '28.5.0.7'}
-          - {elixir: '1.20.4', otp: '29.1.1'}
+          - {elixir: '1.18.5', otp: '27.3.4.19'}
+          - {elixir: '1.19.6', otp: '28.5.0.8'}
+          - {elixir: '1.20.4', otp: '29.1.2'}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
