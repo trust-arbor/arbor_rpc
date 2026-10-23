@@ -28,9 +28,23 @@ defmodule Arbor.RPC.SubprocessTest do
     host = %{"PATH" => "/bin", "SECRET" => "host-only"}
 
     assert {:ok, %{executable: ^executable, env: env}} =
-             Command.resolve(["fixture"], [env: %{"PATH" => "."}, cd: directory], host)
+             Command.resolve(["fixture"], [env: %{"PATH" => directory}, cd: directory], host)
 
     assert env["SECRET"] == false
+
+    # Relative and empty PATH entries never resolve inside `cd`: a bare name
+    # must not pick up a file planted in the workspace.
+    for path <- [".", "", "bin:", ":#{directory}/missing", "../#{Path.basename(directory)}"] do
+      assert {:error, {:executable_not_found, "fixture"}} =
+               Command.resolve(["fixture"], [env: %{"PATH" => path}, cd: directory], host)
+    end
+
+    assert {:ok, %{executable: ^executable}} =
+             Command.resolve(
+               ["fixture"],
+               [env: %{"PATH" => ".:#{directory}"}, cd: directory],
+               host
+             )
 
     assert {:ok, %{executable: ^executable}} =
              Command.resolve(["./fixture"], [cd: directory, env: %{"PATH" => false}], host)
