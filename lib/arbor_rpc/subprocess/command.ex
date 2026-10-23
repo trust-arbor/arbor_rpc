@@ -61,8 +61,16 @@ defmodule Arbor.RPC.Subprocess.Command do
       else
         separator = if match?({:win32, _}, os_type), do: ";", else: ":"
 
+        # Only absolute PATH entries take part in lookup. Relative or empty
+        # entries would otherwise resolve against `cd`, which is usually the
+        # untrusted workspace, and a bare command name could then pick up a
+        # file planted there.
         if is_binary(path),
-          do: Enum.map(String.split(path, separator), &Path.expand(Path.join(&1, name), cd)),
+          do:
+            path
+            |> String.split(separator)
+            |> Enum.filter(&(Path.type(&1) == :absolute))
+            |> Enum.map(&Path.join(&1, name)),
           else: []
       end
 

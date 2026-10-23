@@ -146,7 +146,11 @@ defmodule Arbor.RPC.SubprocessCaptureTest do
     assert {:ok, output, 0} =
              Subprocess.capture(["fixture"],
                cd: directory,
-               env: %{"PATH" => ".", "CAPTURE_EXPLICIT" => "literal", "CAPTURE_SECRET" => false}
+               env: %{
+                 "PATH" => directory,
+                 "CAPTURE_EXPLICIT" => "literal",
+                 "CAPTURE_SECRET" => false
+               }
              )
 
     assert output == "#{directory}|literal|unset"
