@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.0.0-rc.2 — 2026-10-22
+
 - **Security:** `Arbor.RPC.Subprocess.Command.resolve/4` ignores relative and empty child `PATH` entries. They previously resolved against the child's working directory, so a bare command name could select an executable planted in an untrusted workspace.
 - Refresh published-RC installation guidance and consolidate current documentation.
 
