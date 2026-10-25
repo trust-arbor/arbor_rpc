@@ -15,8 +15,10 @@ Floating latest lanes record resolved versions and expose failures; they do not
 automatically expand the supported matrix.
 
 On macOS/Darwin and Linux, the custom compiler builds the native helper from
-reviewed C17 source. Set `CC` to one compiler executable if the default `cc`
-is unsuitable. Leave `ARBOR_V2_DEPS`, `MIX_DEPS_PATH` and build/dependency
+reviewed C17 source into `_build/<env>/lib/arbor_rpc/priv/native/`. Set `CC` to
+one compiler executable if the default `cc` is unsuitable. In this repository's
+`:dev` and `:test` environments compiler warnings are errors; dependency
+installs (`:prod`) only print them. Leave `ARBOR_V2_DEPS`, `MIX_DEPS_PATH` and build/dependency
 overrides unset for normal dependency resolution and packaging. `ARBOR_V2_DEPS`
 is an explicit local source override for external dependencies, not a consumer
 installation requirement. RPC needs neither `ARBOR_V2_LOCAL` nor
@@ -41,8 +43,10 @@ newer formatter behavior does not force unrelated edits.
 
 The ordinary suite covers envelope/framing/environment mechanics, subprocess
 delivery and cleanup, capture and write admission. Native lifecycle cases start
-real owned children and need the supported native platform/compiler. For a
-focused run:
+real owned children and need the supported native platform/compiler.
+`native_helper_c_test.exs` also runs the helper's C-level suites: the protocol
+and cleanup state machine in `test/support/native/test_native_protocol.py`
+(skipped without `python3`) and the post-reap invariant test. For a focused run:
 
 ```sh
 MIX_ENV=test mix test test/arbor_rpc/subprocess_test.exs \
@@ -92,8 +96,10 @@ checker verifies Hex/source checksums, package and documentation metadata,
 then uses a fresh consumer to resolve normal Hex dependencies, compile the
 shipped C source, and run the installed probe. It builds an OTP release and
 repeats the probe with compiler lookup denied. That probe checks exact output
-bytes/nonzero status, installed helper identity, typed child/group cleanup and
-idempotent close.
+bytes/nonzero status, installed helper identity, typed child/group cleanup,
+EOF-first close and idempotent close. A second consumer then compiles with no
+C compiler: it must warn, report the helper unavailable while framing and
+JSON-RPC work, and fail under `ARBOR_RPC_NATIVE=required`.
 
 `--metadata-only` stops before installation and runtime probes. It is not an
 installed/release verdict. Local offline checks may explicitly select independent

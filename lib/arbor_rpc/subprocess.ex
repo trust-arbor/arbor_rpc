@@ -31,8 +31,14 @@ defmodule Arbor.RPC.Subprocess do
   `:max_mailbox_messages` (1024), `:max_write_bytes` (1 MiB),
   `:max_pending_writes` (64), `:max_pending_write_bytes` (4 MiB, including
   reservation metadata),
-  `:cleanup_timeout` (500 ms), `:term_grace` (100 ms) and `:closed_retention`
-  (5 seconds). Cleanup requires at least 50 ms beyond TERM grace for KILL.
+  `:cleanup_timeout` (500 ms), `:eof_grace` (250 ms), `:term_grace` (100 ms)
+  and `:closed_retention` (5 seconds). Cleanup closes the child's stdin first,
+  sends TERM only if the child outlives `:eof_grace`, and sends KILL after
+  `:term_grace`; a child that exits on EOF is never signalled. In group mode an
+  exited leader's remaining group is signalled without the EOF grace, and a
+  stream failure (frame, queue or mailbox pressure) skips it as well. The
+  budget must cover `eof_grace + term_grace + 50` ms; an omitted `:eof_grace`
+  shrinks to fit a smaller budget, while an explicit one is validated.
   Explicit close stops the actor. Natural exit or pressure failure drains
   admitted frames until terminal delivery or `:closed_retention`. The guardian
   retains a typed cleanup receipt for `:receipt_retention` (5 seconds), then
@@ -47,19 +53,23 @@ defmodule Arbor.RPC.Subprocess do
   Helper/guardian loss cannot confirm cleanup. Numeric PID diagnostics are not
   signalling authority; retired unmanaged cleanup is unsupported.
 
-  Source installation on macOS/Darwin and Linux requires a C17 compiler, even
-  for transitive MCP/ACP use that never opens a subprocess. Reviewed C source
-  ships rather than a prebuilt helper; assembled releases include the helper
-  built for their target. Installed runtime lookup uses `:code.priv_dir` with
-  no runtime compiler or NIF. Windows native subprocess operations are explicitly
-  unsupported; framing is separate. Missing helper and unsupported platform
-  errors have no numeric signalling fallback. Only the actually qualified
+  Reviewed C source ships rather than a prebuilt helper. On macOS/Darwin and
+  Linux, source installation builds it when a C17 compiler is available; without
+  one the build warns and continues, and this module reports
+  `{:error, :native_helper_unavailable}` (see `available?/0`). Set
+  `ARBOR_RPC_NATIVE=required` or `config :arbor_rpc, native_helper: :required` to
+  make a missing helper a build error, or `:skip` to never build it. Assembled
+  releases include the helper built for their target. Installed runtime lookup
+  uses `:code.priv_dir` with no runtime compiler or NIF. Windows native
+  subprocess operations are explicitly unsupported; framing is separate.
+  Missing helper and unsupported platform errors have no numeric signalling
+  fallback. Only the actually qualified
   platform/architecture matrix is supported. Final-source lifecycle/pressure,
   helper hard death and uninterruptible child exit remain qualification gates;
   this release does not require a Windows backend.
   """
 
-  alias Arbor.RPC.Subprocess.{Actor, Guardian, Receipt}
+  alias Arbor.RPC.Subprocess.{Actor, Guardian, NativeBackend, Receipt}
 
   alias Arbor.RPC.Subprocess.Internal.Call
 
@@ -73,6 +83,18 @@ defmodule Arbor.RPC.Subprocess do
             cleanup_timeout: pos_integer(),
             max_write_bytes: pos_integer()
           }
+
+  @doc """
+  Whether the native helper is installed for this platform.
+
+  When `false`, `open/2` and `capture/2` return
+  `{:error, :native_helper_unavailable}` (for example, no C compiler was
+  available when the package was built) or
+  `{:error, {:unsupported_subprocess_backend, platform}}`. Framing and
+  JSON-RPC never need the helper.
+  """
+  @spec available?() :: boolean()
+  def available?, do: match?({:ok, _executable}, NativeBackend.available())
 
   @spec open([binary()], keyword()) :: {:ok, t()} | {:error, term()}
   def open(command, opts \\ []) do
@@ -175,6 +197,17 @@ defmodule Arbor.RPC.Subprocess do
   """
   @spec write(t(), iodata()) :: :ok | {:error, term()}
   def write(%__MODULE__{} = handle, data), do: Call.call(handle, {:write, data})
+
+  @doc """
+  Sends EOF to the child's stdin without stopping the child.
+
+  Bytes from writes that already returned `:ok` reach the child before EOF.
+  Writes still pending when this runs, and any later write, return
+  `{:error, :closed}`. Output remains readable and the child keeps running
+  until it exits or `close/1` ends it. Repeated calls return `:ok`.
+  """
+  @spec close_input(t()) :: :ok | {:error, term()}
+  def close_input(%__MODULE__{} = handle), do: Call.call(handle, :close_input)
 
   @doc """
   Closes the child within its finite budget; repeated close is safe.

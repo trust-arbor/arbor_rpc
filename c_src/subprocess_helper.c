@@ -1,10 +1,13 @@
-/* Arbor RPC native subprocess helper. Protocol version 1; source-build draft.
- * Protocol: big-endian uint32 packet length followed by type+payload.
- * Input I=stdin bytes, A=one output credit, H=finite owner lease,
- * C=cleanup, Q=exit after cleanup; all carry the broker's uint64 token.
- * No command contains or accepts an OS PID or PGID.
- * Output S=start proof, D=stdout bytes, O=observed exit (still unreaped),
- * F=stdout EOF, R=cleanup receipt, E=protocol rejection.
+/* Arbor RPC native subprocess helper. Protocol version 2; source-build draft.
+ * Protocol: big-endian uint32 packet length followed by version+type+payload.
+ * Input I=stdin bytes, F=stdin EOF after admitted bytes drain, A=one output
+ * credit, H=finite owner lease, C=cleanup, X=cleanup without the EOF grace,
+ * Q=exit after cleanup; all carry the broker's uint64 token. No command contains or accepts an OS PID or PGID.
+ * Output S=start proof, D=stdout bytes, W=write admission, O=observed exit
+ * (still unreaped), F=stdout EOF, R=cleanup receipt, E=protocol rejection.
+ * Orderly cleanup closes stdin first and sends TERM only after the EOF grace,
+ * so a child that exits on EOF is never signalled; KILL follows the TERM grace.
+ * Failures (protocol rejection, X) send TERM without waiting.
  */
 #define _POSIX_C_SOURCE 200809L
 #include <arpa/inet.h>
@@ -24,19 +27,21 @@
 
 extern char **environ;
 #define CHUNK 16384
-#define VERSION 1
+#define VERSION 2
 #define MAX_WRITE_CAP (64U * 1024U * 1024U)
 #define SLOT_COUNT 10
+#define MAX_POLL_MS 1000
+#define PROBE_POLL_MS 5
 
 struct packet { unsigned char bytes[CHUNK + 32]; size_t size, sent; bool data; };
 struct broker {
   pid_t child;
   uint64_t token;
-  bool group, owns, observed, announced, closing, killed, finished, input_eof;
+  bool group, owns, observed, announced, closing, termed, killed, finished, input_eof;
   bool output_eof, disconnected, quit, confirmed, probe_complete, targeted_group_gone;
   int child_in, child_out, exec_status, status, signals;
-  int64_t lease_at, term_at, cleanup_at, retire_at;
-  unsigned grace_ms, budget_ms, lease_ms, retention_ms, write_cap, startup_ms;
+  int64_t lease_at, eof_at, kill_at, cleanup_at, retire_at;
+  unsigned eof_ms, grace_ms, budget_ms, lease_ms, retention_ms, write_cap, startup_ms;
   uint64_t data_sequence, acknowledged_sequence, write_sequence;
   bool credit_started, merge_stderr;
   unsigned credit;
@@ -72,6 +77,18 @@ static int cloexec_pipe(int fds[2]) {
   if (fcntl(fds[0], F_SETFD, FD_CLOEXEC) != 0 ||
       fcntl(fds[1], F_SETFD, FD_CLOEXEC) != 0) return -1;
   return 0;
+}
+/* SIGCHLD only wakes poll; the main loop alone observes and reaps the child. */
+static int child_events[2] = {-1, -1};
+static void child_event(int sig) {
+  int saved = errno;
+  ssize_t ignored = write(child_events[1], "", 1);
+  (void)ignored; (void)sig;
+  errno = saved;
+}
+static void drain_child_events(void) {
+  unsigned char sink[64];
+  while (read(child_events[0], sink, sizeof(sink)) > 0) {}
 }
 static bool queue_packet(struct broker *b, unsigned char type,
                          const unsigned char *body, size_t size) {
@@ -169,16 +186,27 @@ static void failed_signal(struct broker *b) {
   bool exited = observe(b);
   finish(b, exited && b->owns);
 }
-static void begin_cleanup(struct broker *b) {
+static void send_term(struct broker *b) {
+  /* A late wake (stopped helper, host sleep) must not push KILL past the
+   * budget: KILL always precedes giving up on an unobserved child. */
+  int64_t kill_at = now_ms() + b->grace_ms, latest = b->cleanup_at - 50;
+  b->termed = true; b->kill_at = kill_at < latest ? kill_at : latest;
+  if (!owned_signal(b, SIGTERM)) failed_signal(b);
+}
+/* Orderly cleanup waits the EOF grace before TERM; a failure cleanup does not,
+ * and also cuts short an orderly cleanup that is still waiting. */
+static void begin_cleanup(struct broker *b, bool graceful) {
   if (b->finished) { if (b->probe_complete) receipt(b, b->confirmed); return; }
-  if (b->closing) return;
-  b->closing = true; close_fd(&b->child_in); b->writing_size = 0;
+  if (b->closing) { if (!graceful && !b->termed) send_term(b); return; }
+  /* EOF first: unsent input is discarded and stdin closes before any signal. */
+  b->closing = true; close_fd(&b->child_in); b->writing_size = b->writing_sent = 0;
   int64_t now = now_ms();
-  b->term_at = now + b->grace_ms; b->cleanup_at = now + b->budget_ms;
+  b->eof_at = now + b->eof_ms; b->cleanup_at = now + b->budget_ms;
   observe(b);
   if (!b->owns) { finish(b, false); return; }
   if (!b->group && b->observed) { finish(b, true); return; }
-  if (!owned_signal(b, SIGTERM)) { failed_signal(b); return; }
+  /* An exited group leader leaves only stragglers; they get no EOF grace. */
+  if (b->observed || !graceful || b->eof_ms == 0) send_term(b);
 }
 static void advance_cleanup(struct broker *b) {
   observe(b);
@@ -189,10 +217,15 @@ static void advance_cleanup(struct broker *b) {
     if (queue_packet(b, 'O', body, sizeof(body))) b->announced = true;
   }
   if (b->finished) { probe_reaped_group(b); return; }
-  if (!b->closing && (b->disconnected || now >= b->lease_at)) begin_cleanup(b);
+  if (!b->closing && (b->disconnected || now >= b->lease_at)) begin_cleanup(b, true);
   if (!b->closing || b->finished) return;
   if (b->observed && (!b->group || b->killed)) { finish(b, true); return; }
-  if (!b->killed && now >= b->term_at) {
+  if (!b->termed) {
+    if (!b->observed && now < b->eof_at) return;
+    send_term(b);
+    if (b->finished) return;
+  }
+  if (!b->killed && now >= b->kill_at) {
     b->killed = true;
     if (!owned_signal(b, SIGKILL)) { failed_signal(b); return; }
   }
@@ -202,15 +235,22 @@ static void advance_cleanup(struct broker *b) {
 }
 static void write_reply(struct broker *b, uint64_t sequence, unsigned char result) {
   unsigned char body[17]; put64(body, b->token); put64(body + 8, sequence); body[16] = result;
-  if (!queue_packet(b, 'W', body, sizeof(body))) { b->disconnected = true; begin_cleanup(b); }
+  if (!queue_packet(b, 'W', body, sizeof(body))) { b->disconnected = true; begin_cleanup(b, false); }
 }
 static void handle_command(struct broker *b, const unsigned char *body, size_t size) {
   if (size < 10 || body[0] != VERSION || get64(body + 2) != b->token) {
-    rejection(b, 1); begin_cleanup(b); return;
+    rejection(b, 1); begin_cleanup(b, false); return;
   }
   unsigned char type = body[1];
-  if (type == 'C' && size == 10) { begin_cleanup(b); return; }
-  if (type == 'Q' && size == 10) { b->quit = true; begin_cleanup(b); return; }
+  if (type == 'C' && size == 10) { begin_cleanup(b, true); return; }
+  if (type == 'Q' && size == 10) { b->quit = true; begin_cleanup(b, true); return; }
+  if (type == 'X' && size == 10) { begin_cleanup(b, false); return; }
+  if (type == 'F' && size == 10) {
+    /* Admitted bytes still reach the child; later writes report closed. */
+    b->input_eof = true;
+    if (b->writing_sent == b->writing_size) close_fd(&b->child_in);
+    return;
+  }
   if (type == 'H' && size == 10) {
     if (!b->closing) b->lease_at = now_ms() + b->lease_ms;
     return;
@@ -221,11 +261,11 @@ static void handle_command(struct broker *b, const unsigned char *body, size_t s
         (sequence == b->data_sequence && sequence > b->acknowledged_sequence)) {
       b->credit_started = true; b->acknowledged_sequence = sequence; b->credit = 1; return;
     }
-    rejection(b, 4); begin_cleanup(b); return;
+    rejection(b, 4); begin_cleanup(b, false); return;
   }
   if (type == 'I' && size >= 18) {
     uint64_t sequence = get64(body + 10);
-    if (sequence == 0 || sequence <= b->write_sequence) { rejection(b, 4); begin_cleanup(b); return; }
+    if (sequence == 0 || sequence <= b->write_sequence) { rejection(b, 4); begin_cleanup(b, false); return; }
     b->write_sequence = sequence;
     if (b->closing || b->input_eof || b->child_in < 0) { write_reply(b, sequence, 2); return; }
     size_t bytes = size - 18;
@@ -237,16 +277,16 @@ static void handle_command(struct broker *b, const unsigned char *body, size_t s
     memcpy(b->writing + b->writing_size, body + 18, bytes); b->writing_size += bytes;
     write_reply(b, sequence, 0); return;
   }
-  rejection(b, 3); begin_cleanup(b);
+  rejection(b, 3); begin_cleanup(b, false);
 }
 static void read_commands(struct broker *b) {
   size_t left = (size_t)b->write_cap + 22 - b->incoming_size;
-  if (!left) { rejection(b, 2); begin_cleanup(b); return; }
+  if (!left) { rejection(b, 2); begin_cleanup(b, false); return; }
   ssize_t n = read(STDIN_FILENO, b->incoming + b->incoming_size, left);
-  if (n == 0) { b->disconnected = true; begin_cleanup(b); return; }
+  if (n == 0) { b->disconnected = true; begin_cleanup(b, true); return; }
   if (n < 0) {
     if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
-      b->disconnected = true; begin_cleanup(b);
+      b->disconnected = true; begin_cleanup(b, true);
     }
     return;
   }
@@ -254,7 +294,7 @@ static void read_commands(struct broker *b) {
   while (b->incoming_size >= 4) {
     uint32_t size = get32(b->incoming);
     if (size < 10 || size > b->write_cap + 18) {
-      rejection(b, 2); begin_cleanup(b); b->incoming_size = 0; return;
+      rejection(b, 2); begin_cleanup(b, false); b->incoming_size = 0; return;
     }
     if (b->incoming_size < (size_t)size + 4) return;
     handle_command(b, b->incoming + 4, size);
@@ -268,14 +308,14 @@ static void vendor_output(struct broker *b) {
   ssize_t n = read(b->child_out, data + 16, CHUNK);
   if (n > 0) {
     put64(data, b->token); put64(data + 8, ++b->data_sequence);
-    if (!queue_packet(b, 'D', data, (size_t)n + 16)) { begin_cleanup(b); return; }
+    if (!queue_packet(b, 'D', data, (size_t)n + 16)) { begin_cleanup(b, false); return; }
     b->credit = 0;
   } else if (n == 0) {
     close_fd(&b->child_out); b->output_eof = true;
     unsigned char token[8]; put64(token, b->token);
     if (!queue_packet(b, 'F', token, sizeof(token))) b->disconnected = true;
   } else if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
-    close_fd(&b->child_out); begin_cleanup(b);
+    close_fd(&b->child_out); begin_cleanup(b, false);
   }
 }
 static void vendor_input(struct broker *b) {
@@ -302,8 +342,23 @@ static void child_status(int fd, int status) {
    * let the vendor execute after the parent failed to establish ownership. */
   if (written != sizeof(status)) _exit(127);
 }
+static int poll_timeout(const struct broker *b) {
+  /* Child exit arrives through child_events; only deadlines need a timeout.
+   * A write failure marks the owner disconnected without starting cleanup. */
+  int64_t now = now_ms(), next;
+  if (b->disconnected && !b->closing && !b->finished) return 0;
+  if (b->finished) next = b->probe_complete ? b->retire_at : now + PROBE_POLL_MS;
+  else if (!b->closing) next = b->lease_at;
+  else {
+    next = !b->termed ? b->eof_at : !b->killed ? b->kill_at : b->cleanup_at;
+    if (b->cleanup_at < next) next = b->cleanup_at;
+  }
+  int64_t cap = child_events[0] < 0 ? PROBE_POLL_MS : MAX_POLL_MS;
+  if (next > now + cap) next = now + cap;
+  return next <= now ? 0 : (int)(next - now);
+}
 int main(int argc, char **argv) {
-  if (argc < 12 || strcmp(argv[1], "1") != 0 || strcmp(argv[10], "--") != 0) {
+  if (argc < 13 || strcmp(argv[1], "2") != 0 || strcmp(argv[11], "--") != 0) {
     fprintf(stderr, "invalid Arbor RPC helper protocol or startup arguments\n"); return 2;
   }
   struct broker b; memset(&b, 0, sizeof(b));
@@ -311,13 +366,14 @@ int main(int argc, char **argv) {
   if (strcmp(argv[2], "0") != 0 && strcmp(argv[2], "1") != 0) return 2;
   if (strcmp(argv[3], "0") != 0 && strcmp(argv[3], "1") != 0) return 2;
   b.group = strcmp(argv[2], "1") == 0; b.merge_stderr = strcmp(argv[3], "1") == 0;
-  b.grace_ms = parse_ms(argv[4]); b.budget_ms = parse_ms(argv[5]);
-  b.lease_ms = parse_ms(argv[6]); b.retention_ms = parse_ms(argv[7]);
-  b.startup_ms = parse_ms(argv[9]);
-  char *end; unsigned long cap = strtoul(argv[8], &end, 10);
-  if (!*argv[8] || *end || cap == 0 || cap > MAX_WRITE_CAP) return 2;
+  b.eof_ms = parse_ms(argv[4]); b.grace_ms = parse_ms(argv[5]);
+  b.budget_ms = parse_ms(argv[6]); b.lease_ms = parse_ms(argv[7]);
+  b.retention_ms = parse_ms(argv[8]); b.startup_ms = parse_ms(argv[10]);
+  char *end; unsigned long cap = strtoul(argv[9], &end, 10);
+  if (!*argv[9] || *end || cap == 0 || cap > MAX_WRITE_CAP) return 2;
   b.write_cap = (unsigned)cap;
-  if (b.budget_ms < b.grace_ms + 50 || !b.lease_ms || !b.retention_ms || !b.startup_ms) return 2;
+  if (b.budget_ms < b.eof_ms + b.grace_ms + 50 || !b.lease_ms || !b.retention_ms ||
+      !b.startup_ms) return 2;
   b.incoming = malloc((size_t)b.write_cap + 22); b.writing = malloc(b.write_cap);
   if (!b.incoming || !b.writing) return 2;
   b.lease_at = now_ms() + b.lease_ms;
@@ -342,7 +398,7 @@ int main(int argc, char **argv) {
     close(in[0]); close(out[1]);
     /* This trusted setup marker precedes exec, keeping fast exits identifiable. */
     child_status(exec_ack[1], 0);
-    execve(argv[11], &argv[11], environ);
+    execve(argv[12], &argv[12], environ);
     int error = errno; child_status(exec_ack[1], error); _exit(127);
   }
   b.owns = true; close(in[0]); close(out[1]); close(exec_ack[1]);
@@ -369,24 +425,34 @@ int main(int argc, char **argv) {
   unsigned char start[21]; put64(start, b.token); put32(start + 8, (uint32_t)b.child);
   put32(start + 12, (uint32_t)(b.group ? b.child : 0)); start[16] = b.group ? 1 : 0;
   put32(start + 17, (uint32_t)b.exec_status); queue_packet(&b, 'S', start, sizeof(start));
-  if (!setup_ok) begin_cleanup(&b);
+  /* Installed after startup: the loop's first observe() covers an earlier exit,
+   * and a later exit interrupts poll through child_events. Without the pipe
+   * (descriptor exhaustion) the loop falls back to short polling. */
+  sa.sa_handler = child_event; sa.sa_flags = SA_NOCLDSTOP;
+  sigset_t chld; sigemptyset(&chld); sigaddset(&chld, SIGCHLD);
+  if (cloexec_pipe(child_events) || nonblocking(child_events[0]) < 0 ||
+      nonblocking(child_events[1]) < 0 || sigaction(SIGCHLD, &sa, NULL) != 0 ||
+      sigprocmask(SIG_UNBLOCK, &chld, NULL) != 0) close_fd(&child_events[0]);
+  if (!setup_ok) begin_cleanup(&b, false);
   while (true) {
     advance_cleanup(&b);
     flush_output(&b);
     if (b.finished && b.probe_complete &&
         (b.disconnected || (b.quit && !b.count) || now_ms() >= b.retire_at)) break;
-    struct pollfd fds[4] = {
+    struct pollfd fds[5] = {
       {.fd = b.disconnected ? -1 : 0, .events = POLLIN | POLLHUP},
       {.fd = b.disconnected || !b.count ? -1 : 1, .events = POLLOUT},
       {.fd = b.credit && b.count < SLOT_COUNT - 4 ? b.child_out : -1, .events = POLLIN | POLLHUP},
-      {.fd = b.writing_sent < b.writing_size || b.input_eof ? b.child_in : -1, .events = POLLOUT}
+      {.fd = b.writing_sent < b.writing_size || b.input_eof ? b.child_in : -1, .events = POLLOUT},
+      {.fd = child_events[0], .events = POLLIN}
     };
-    int result = poll(fds, 4, 5);
-    if (result < 0 && errno != EINTR) { b.disconnected = true; begin_cleanup(&b); }
+    int result = poll(fds, 5, poll_timeout(&b));
+    if (result < 0 && errno != EINTR) { b.disconnected = true; begin_cleanup(&b, true); }
     if (fds[0].revents) read_commands(&b);
     if (fds[1].revents) flush_output(&b);
     if (fds[2].revents) vendor_output(&b);
     if (fds[3].revents) vendor_input(&b);
+    if (fds[4].revents) drain_child_events();
   }
   close_fd(&b.child_in); close_fd(&b.child_out);
   free(b.incoming); free(b.writing);

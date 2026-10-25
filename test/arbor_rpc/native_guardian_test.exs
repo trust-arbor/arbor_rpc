@@ -229,7 +229,7 @@ defmodule Arbor.RPC.NativeGuardianTest do
     guardian = :sys.get_state(actor).guardian
     port = :sys.get_state(guardian).port
     child = Subprocess.os_pid(handle)
-    send(guardian, {port, {:data, <<1, ?R, 0::64>>}})
+    send(guardian, {port, {:data, <<2, ?R, 0::64>>}})
 
     assert {:closed, {:cleanup_failed, :helper_failure, {:error, :invalid_helper_packet}}, ""} =
              FramedStream.next(handle, 1000)

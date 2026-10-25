@@ -1,6 +1,7 @@
 """Real-process checks against the shipped native source, built before this suite."""
 import os
 import select
+import signal
 import struct
 import subprocess
 import time
@@ -8,8 +9,11 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-BROKER = str(ROOT.parents[2] / "priv/native/arbor_rpc_subprocess")
-VENDOR = str(ROOT / "vendor_fixture")
+# The ExUnit wrapper passes the installed helper and a freshly built fixture.
+BROKER = os.environ.get(
+    "ARBOR_RPC_HELPER", str(ROOT.parents[2] / "_build/test/lib/arbor_rpc/priv/native/arbor_rpc_subprocess")
+)
+VENDOR = os.environ.get("ARBOR_RPC_VENDOR_FIXTURE", str(ROOT / "vendor_fixture"))
 
 
 def decode_fixture(output):
@@ -42,6 +46,19 @@ def alive(pid):
         return False
 
 
+def eventually_dead(pid, timeout=2):
+    """Gone, or a zombie awaiting a reaper: the process itself has exited."""
+    cutoff = time.monotonic() + timeout
+    while time.monotonic() < cutoff:
+        if not alive(pid):
+            return True
+        state = subprocess.run(["/bin/ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+        if state.stdout.strip().startswith("Z"):
+            return True
+        time.sleep(0.01)
+    return False
+
+
 def eventually_gone(pid, timeout=2):
     cutoff = time.monotonic() + timeout
     while time.monotonic() < cutoff:
@@ -52,9 +69,11 @@ def eventually_gone(pid, timeout=2):
 
 
 class Controller:
-    def __init__(self, mode, *args, group=False, env=None, cwd=None, lease=5000):
+    def __init__(self, mode, *args, group=False, env=None, cwd=None, lease=5000, eof=0, grace=50, budget=None):
+        budget = eof + grace + 450 if budget is None else budget
         self.proc = subprocess.Popen(
-            [BROKER, "1", str(int(group)), "0", "50", "500", str(lease), "5000", "1048576", "1000", "--", VENDOR, mode, *args],
+            [BROKER, "2", str(int(group)), "0", str(eof), str(grace), str(budget), str(lease), "5000", "1048576", "1000",
+             "--", VENDOR, mode, *args],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=env, cwd=cwd, bufsize=0,
         )
@@ -73,7 +92,7 @@ class Controller:
         if kind == "I":
             self.write_sequence += 1
             body = struct.pack(">Q", self.write_sequence) + body
-        packet = b"\x01" + kind.encode() + struct.pack(">Q", self.token if token is None else token) + body
+        packet = b"\x02" + kind.encode() + struct.pack(">Q", self.token if token is None else token) + body
         self.proc.stdin.write(struct.pack(">I", len(packet)) + packet)
         self.proc.stdin.flush()
 
@@ -85,7 +104,7 @@ class Controller:
                 if len(self.buffer) >= size + 4:
                     packet = bytes(self.buffer[4: size + 4])
                     del self.buffer[:size + 4]
-                    assert packet[0] == 1, packet
+                    assert packet[0] == 2, packet
                     kind, body = chr(packet[1]), packet[2:]
                     if kind == "D":
                         token, sequence = struct.unpack(">QQ", body[:16])
@@ -129,6 +148,13 @@ class Controller:
     def cleanup(self):
         self.command("C")
         return struct.unpack(">QBBIII", self.until("R"))
+
+    def take(self, kind, timeout=2):
+        for index, (pending, body) in enumerate(self.pending):
+            if pending == kind:
+                del self.pending[index]
+                return body
+        return self.until(kind, timeout)
 
     def dispose(self):
         if self.proc.poll() is None:
@@ -223,7 +249,8 @@ class BrokerTests(unittest.TestCase):
         decoy = subprocess.Popen(["/bin/sleep", "10"])
         try:
             c.command("A"); descendant = int(c.until("D"))
-            c.until("O")
+            # The leader's exit can be observed before its output is read.
+            c.take("O")
             time.sleep(0.15)
             self.assertTrue(alive(c.pid)); self.assertTrue(alive(descendant))
             self.assertEqual(os.getpgid(descendant), c.pid)
@@ -293,9 +320,10 @@ class BrokerTests(unittest.TestCase):
     def test_duplicate_native_credit_is_rejected_and_owned_child_is_reaped(self):
         c = Controller("flood")
         try:
-            c.command("A"); self.assertEqual(len(c.until("D")), 16384)
+            # One credit admits one chunk of at most 16 KiB; Linux pipes can split it.
+            c.command("A"); self.assertIn(len(c.until("D")), range(1, 16385))
             # Direct malformed protocol reuse, not the sequence-aware facade.
-            packet = b"\x01A" + struct.pack(">QQ", c.token, 0)
+            packet = b"\x02A" + struct.pack(">QQ", c.token, 0)
             c.proc.stdin.write(struct.pack(">I", len(packet)) + packet)
             c.proc.stdin.flush()
             self.assertEqual(c.until("E"), b"\x04")
@@ -305,6 +333,110 @@ class BrokerTests(unittest.TestCase):
         finally:
             c.dispose()
 
+
+    def test_cleanup_closes_stdin_first_and_never_signals_a_child_that_exits(self):
+        c = Controller("eof-exit", eof=1000)
+        try:
+            c.command("A"); self.assertEqual(c.until("D"), b"ready\n")
+            started = time.monotonic()
+            _, direct, scope, status, signals, pid = c.cleanup()
+            self.assertEqual((direct, scope, status, signals, pid), (1, 1, 0, 0, c.pid))
+            self.assertLess(time.monotonic() - started, 0.5)
+        finally:
+            c.dispose()
+
+    def test_child_that_outlives_eof_grace_gets_term_then_reaps(self):
+        c = Controller("ignore-eof", eof=300)
+        try:
+            c.command("A"); self.assertEqual(c.until("D"), b"ready\n")
+            started = time.monotonic()
+            result = c.cleanup()
+            elapsed = time.monotonic() - started
+            self.assertEqual(result[1:5], (1, 1, 143, 1))
+            self.assertGreaterEqual(elapsed, 0.3)
+            self.assertLess(elapsed, 0.8)
+            self.assertFalse(alive(c.pid))
+        finally:
+            c.dispose()
+
+    def test_zero_eof_grace_signals_without_waiting(self):
+        c = Controller("ignore-eof", eof=0)
+        try:
+            c.command("A"); self.assertEqual(c.until("D"), b"ready\n")
+            started = time.monotonic()
+            result = c.cleanup()
+            self.assertEqual(result[1:5], (1, 1, 143, 1))
+            self.assertLess(time.monotonic() - started, 0.25)
+        finally:
+            c.dispose()
+
+    def test_failure_cleanup_skips_eof_grace_and_cuts_an_orderly_wait_short(self):
+        for escalate in (False, True):
+            c = Controller("ignore-eof", eof=2000)
+            try:
+                c.command("A"); self.assertEqual(c.until("D"), b"ready\n")
+                started = time.monotonic()
+                if escalate:
+                    c.command("C")
+                    time.sleep(0.1)
+                c.command("X")
+                result = struct.unpack(">QBBIII", c.until("R"))
+                self.assertEqual(result[1:5], (1, 1, 143, 1))
+                self.assertLess(time.monotonic() - started, 0.6)
+            finally:
+                c.dispose()
+
+    def test_late_wake_after_eof_grace_still_kills_before_giving_up(self):
+        # Smallest budget for these graces: KILL is due by 600 ms, the budget
+        # ends at 650 ms. Waking at ~450 ms, a TERM grace counted from the
+        # wake would run past the budget.
+        c = Controller("ignore-term", eof=300, grace=300, budget=650)
+        try:
+            c.command("A"); self.assertEqual(c.until("D"), b"ready\n")
+            c.command("C")
+            time.sleep(0.05)
+            os.kill(c.proc.pid, signal.SIGSTOP)
+            time.sleep(0.4)
+            os.kill(c.proc.pid, signal.SIGCONT)
+            result = struct.unpack(">QBBIII", c.until("R"))
+            # Linux resumes a stopped poll with its remaining timeout, so the
+            # wake can also land after the budget and leave the receipt
+            # honestly unconfirmed. Either way TERM and KILL precede giving up.
+            self.assertEqual(result[4], 2)
+            self.assertTrue(eventually_dead(c.pid))
+        finally:
+            c.dispose()
+
+    def test_input_eof_delivers_admitted_bytes_then_rejects_writes(self):
+        c = Controller("exact")
+        try:
+            data = b"before eof\n" * 1000
+            c.command("I", data)
+            self.assertEqual(c.until("W")[16], 0)
+            c.command("F")
+            *_, stdin_part = decode_fixture(c.collect())
+            self.assertEqual(stdin_part, data)
+            self.assertEqual(c.take("O"), struct.pack(">I", 23))
+            c.command("I", b"late")
+            self.assertEqual(c.take("W")[16], 2)
+            _, direct, scope, status, signals, pid = c.cleanup()
+            self.assertEqual((direct, scope, status, signals, pid), (1, 1, 23, 0, c.pid))
+        finally:
+            c.dispose()
+
+    def test_group_leader_exit_on_eof_signals_stragglers_without_eof_grace(self):
+        c = Controller("group-eof", group=True, eof=1000)
+        try:
+            c.command("A"); descendant = int(c.until("D"))
+            self.assertEqual(os.getpgid(descendant), c.pgid)
+            started = time.monotonic()
+            result = c.cleanup()
+            self.assertLess(time.monotonic() - started, 0.6)
+            self.assertEqual(result[1:4], (1, 1, 0))
+            self.assertIn(result[4], (1, 2))
+            self.assertFalse(alive(c.pid)); self.assertTrue(eventually_gone(descendant))
+        finally:
+            c.dispose()
 
 
 if __name__ == "__main__":
