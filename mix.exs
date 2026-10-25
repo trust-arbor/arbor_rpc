@@ -130,7 +130,8 @@ defmodule Mix.Tasks.Compile.ArborRpcNative do
   defp prepare_priv do
     legacy = Path.expand("priv/native", __DIR__)
 
-    for name <- ~w(arbor_rpc_subprocess arbor_rpc_subprocess.sha256 arbor_rpc_subprocess.building),
+    for name <-
+          ~w(arbor_rpc_subprocess arbor_rpc_subprocess.sha256 arbor_rpc_subprocess.building),
         do: File.rm(Path.join(legacy, name))
 
     _ = File.rmdir(legacy)
