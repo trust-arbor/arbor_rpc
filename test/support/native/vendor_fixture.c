@@ -76,6 +76,25 @@ int main(int argc, char **argv) {
     }
     return 0;
   }
+  if (strcmp(argv[1], "eof-exit") == 0 || strcmp(argv[1], "ignore-eof") == 0) {
+    /* Default TERM disposition: a signal shows up as status 143, EOF as 0. */
+    bool ignore = strcmp(argv[1], "ignore-eof") == 0;
+    write_bytes("ready\n", 6);
+    unsigned char sink[256];
+    while (read(0, sink, sizeof(sink)) > 0) {}
+    if (!ignore) return 0;
+    while (true) pause();
+  }
+  if (strcmp(argv[1], "group-eof") == 0) {
+    pid_t descendant = fork();
+    if (descendant < 0) return 2;
+    if (descendant == 0) { close(0); while (true) pause(); }
+    char pid[32]; int n = snprintf(pid, sizeof(pid), "%ld\n", (long)descendant);
+    write_bytes(pid, (size_t)n);
+    unsigned char sink[256];
+    while (read(0, sink, sizeof(sink)) > 0) {}
+    return 0;
+  }
   if (strcmp(argv[1], "flood") == 0) {
     unsigned char bytes[16384]; memset(bytes, 'x', sizeof(bytes));
     while (write_bytes(bytes, sizeof(bytes)) == 0) {}

@@ -48,6 +48,43 @@ def unpack(archive, destination):
     }
 
 
+def check_compiler_free_install(consumer, env, evidence):
+    """Without a C compiler the archive still installs, and `required` refuses to."""
+    with tempfile.TemporaryDirectory(prefix="arbor-archive-compiler-free-") as directory:
+        bare = Path(directory) / "consumer"
+        shutil.copytree(consumer, bare, ignore=shutil.ignore_patterns("_build", "installed-checks.json"))
+        check_compiler_free_consumer(bare, env, evidence)
+
+
+def check_compiler_free_consumer(bare, env, evidence):
+    bare_env = dict(env, CC="/compiler-is-missing")
+    print("Compile without a C compiler", flush=True)
+    result = subprocess.run(
+        ["mix", "compile", "--warnings-as-errors"], cwd=bare, env=bare_env,
+        check=True, timeout=180, capture_output=True, text=True,
+    )
+    print(result.stdout, result.stderr, sep="", flush=True)
+    if "native subprocess helper was not built" not in result.stdout + result.stderr:
+        raise ValueError("Compiler-free install did not warn about the missing helper")
+    if (bare / "_build/prod/lib/arbor_rpc/priv/native/arbor_rpc_subprocess").exists():
+        raise ValueError("Compiler-free install produced a helper")
+    print("Probe compiler-free install", flush=True)
+    subprocess.run(
+        ["mix", "run", "--no-compile", "-e", "ArchiveConsumer.probe_without_helper()"],
+        cwd=bare, env=bare_env, check=True, timeout=30,
+    )
+    print("Require the helper without a C compiler", flush=True)
+    required = subprocess.run(
+        ["mix", "deps.compile", "arbor_rpc", "--force"], cwd=bare,
+        env=dict(bare_env, ARBOR_RPC_NATIVE="required"), timeout=180, capture_output=True, text=True,
+    )
+    if required.returncode == 0 or "required but was not built" not in required.stdout + required.stderr:
+        raise ValueError(f"ARBOR_RPC_NATIVE=required accepted a missing compiler:\n{required.stdout}{required.stderr}")
+    evidence["steps"] += [
+        "Compile without a C compiler", "Probe compiler-free install", "Require the helper without a C compiler",
+    ]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("archives", type=Path)
@@ -118,6 +155,8 @@ def main():
                 evidence.setdefault("installed", {})[title] = json.loads(
                     (consumer / "installed-checks.json").read_text()
                 )
+        if not args.metadata_only:
+            check_compiler_free_install(consumer, env, evidence)
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)
         temporary = args.report.with_suffix(args.report.suffix + ".tmp")

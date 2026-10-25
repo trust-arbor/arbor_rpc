@@ -13,7 +13,9 @@ defmodule Arbor.RPC.FacadeBoundaryTest do
           close: 1,
           cleanup_receipt: 1,
           connected?: 1,
-          stats: 1
+          stats: 1,
+          close_input: 1,
+          available?: 0
         ] do
       assert function_exported?(module, name, arity)
     end

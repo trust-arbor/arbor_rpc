@@ -31,12 +31,16 @@ code calls `Arbor.RPC.*`, even if a protocol package already depends on it.
 
 ## Installation
 
-The Elixir minimum is 1.17. On macOS/Darwin and Linux, source installation needs
-a C17 compiler, including applications that use only JSON-RPC or framing. The
-compiler builds the native helper at installation time; assembled releases use
-that helper without a runtime compiler. Windows native subprocess operations
-are unsupported. See [source build requirements](#source-build-and-remaining-gates)
-for the platform and cleanup limits.
+The Elixir minimum is 1.17. On macOS/Darwin and Linux, source installation
+builds the native subprocess helper when a C17 compiler is available. Without
+one, installation warns and continues: JSON-RPC and framing work, and
+`Arbor.RPC.Subprocess` returns `{:error, :native_helper_unavailable}`. Set
+`ARBOR_RPC_NATIVE=required` (or `config :arbor_rpc, native_helper: :required`)
+when your application needs subprocesses and should fail the build instead.
+Assembled releases use the helper without a runtime compiler. Windows native
+subprocess operations are unsupported. See
+[source build requirements](#source-build-and-remaining-gates) for the platform
+and cleanup limits.
 
 Install the published RC with a reproducible Hex dependency:
 
@@ -48,8 +52,8 @@ end
 
 Run `mix deps.get`. For source development, clone the default `main` branch and
 optionally use `{:arbor_rpc, path: "../arbor_rpc"}`. JSON-RPC/framing starts no
-native process, while source installation still builds the helper on supported
-platforms.
+native process; source installation builds the helper on supported platforms
+when a compiler is available.
 
 ## AI agent guidance
 
@@ -75,7 +79,7 @@ dependency and preserves ArborRPC's Elixir 1.17 minimum.
 | `Arbor.RPC.Framing` | Decode LF-delimited bytes with a per-frame limit; the caller bounds its delivery queue. |
 | `Arbor.RPC.StdioFraming` | Read/write UTF-8 line frames through an IO device's current encoding. |
 | `Arbor.RPC.PortEnvironment` | Apply the shared child-environment and release-PATH policy. |
-| `Arbor.RPC.Subprocess` | Own a native child, write bounded input, capture finite output and inspect cleanup receipts. |
+| `Arbor.RPC.Subprocess` | Own a native child, write bounded input, send stdin EOF, capture finite output and inspect cleanup receipts; `available?/0` reports whether the helper is installed. |
 | `Arbor.RPC.FramedStream` | Consume subprocess output through pull reads or acknowledged push delivery. |
 | `Arbor.RPC.Subprocess.Receipt` | Interpret a retained child/group cleanup observation. |
 
@@ -100,6 +104,19 @@ permission-denied or expired observations remain unconfirmed. No signal occurs
 post-reap and no command accepts a caller-supplied PID/PGID. Descendants that
 change group/session are outside targeted-group cleanup; arbitrary process-tree
 containment is not claimed.
+
+Cleanup closes the child's stdin first. TERM follows only if the child outlives
+`:eof_grace` (250 ms), and KILL follows `:term_grace` (100 ms), all within
+`:cleanup_timeout` (500 ms). A child that exits on EOF, as MCP and ACP servers
+should, is never signalled. In group mode, once the leader has exited, the rest
+of its group is signalled without the EOF grace. A stream failure (frame, queue
+or mailbox pressure, a helper protocol error) also skips the EOF grace, so the
+error reaches readers promptly. KILL is always sent before the budget ends,
+even when the helper wakes late. An omitted `:eof_grace` shrinks
+to fit a smaller budget; `eof_grace: 0` restores immediate TERM.
+`close_input/1` sends EOF without closing: bytes from writes that already
+returned `:ok` reach the child first, later writes return `{:error, :closed}`,
+and output stays readable until the child exits.
 
 `close/1` remains finite and reports known failure. Actor death alone cannot
 confirm cleanup. `cleanup_receipt/1` returns a typed receipt distinguishing direct
@@ -207,16 +224,31 @@ The custom Mix compiler builds reviewed `c_src/subprocess_helper.c` with a C17
 compiler on macOS/Darwin and Linux. It runs during RPC source installation,
 including transitive MCP/ACP installation for HTTP-only, BEAM-only or other use
 that never opens a subprocess. `CC` selects an executable; compiler flags and argv are
-fixed, without shell command strings. The generated `priv/native` executable is
-ignored and excluded from Hex source archives; no prebuilt helper is promised.
-A source package install builds it for the target. Assembled releases must
-include that built helper; release/runtime lookup uses
-`:code.priv_dir(:arbor_rpc)`. An installed runtime never invokes a compiler.
-Framing/JSON-RPC do not start a helper. Missing helper and unsupported platform
-errors remain explicit; there is no numeric PID fallback or NIF.
+fixed, without shell command strings; a `CC` containing arguments is a build
+error in every policy. Warnings are errors only when building this
+repository itself, so a newer compiler cannot break a dependency install.
+`ARBOR_RPC_NATIVE` (or `config :arbor_rpc, native_helper: ...`) selects the policy:
+
+| Policy | Without a working compiler |
+|---|---|
+| `auto` (default) | Warn, continue, and report `:native_helper_unavailable` at runtime. |
+| `required` | Fail the build. |
+| `skip` | Never build or ship a helper, even with a compiler. |
+
+Mix does not track these settings, so run `mix deps.compile arbor_rpc --force`
+after changing them or installing a compiler. The executable is built into
+`_build/<env>/lib/arbor_rpc/priv/native/`, so every environment and `MIX_TARGET`
+gets its own build, and a read-only dependency directory works. Its rebuild
+stamp covers the source, compiler path and `--version`, flags and architecture.
+The executable is excluded from Hex source archives; no prebuilt helper is
+promised. Assembled releases must include that built helper; release/runtime
+lookup uses `:code.priv_dir(:arbor_rpc)`. An installed runtime never invokes a
+compiler. Framing/JSON-RPC do not start a helper. Missing helper and unsupported
+platform errors remain explicit; there is no numeric PID fallback or NIF.
 
 Windows native subprocess operations are explicitly unsupported; the compiler
-skips the helper on unsupported platforms and framing remains available. A
+skips the helper on unsupported platforms (unless `required`) and framing
+remains available. A
 Windows backend is not required for the initial v2 release. This source-install
 policy does not certify every Darwin/Linux architecture: advertise only the
 matrix qualified from final source archives and installed releases. Broader

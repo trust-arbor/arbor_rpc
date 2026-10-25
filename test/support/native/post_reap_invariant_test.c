@@ -40,7 +40,7 @@ static void scenario(int probe_mode, bool gone) {
   assert(b.count == 1 && b.packets[b.first].bytes[5] == 'R');
   assert(b.packets[b.first].bytes[14] == 1); /* direct child confirmed */
   assert(b.packets[b.first].bytes[15] == (gone ? 1 : 0));
-  begin_cleanup(&b); /* Repeat close reads receipt; no signal/probe is repeated. */
+  begin_cleanup(&b, true); /* Repeat close reads receipt; no signal/probe is repeated. */
   assert(probes == 1 && actual_signals == 0 && b.signals == 2);
   assert(!owned_signal(&b, SIGKILL));
 }

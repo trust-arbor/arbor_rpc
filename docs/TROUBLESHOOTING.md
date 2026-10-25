@@ -11,9 +11,9 @@ explains their limits.
 | Symptom | Check |
 |---|---|
 | Hex cannot resolve `1.0.0-rc.2` | Use the explicit `1.0.0-rc.2` prerelease requirement; a stable-only constraint does not select it. Check the lockfile and Hex connectivity. The original 2.0.0-rc.1 is retired. |
-| Build says a C compiler is required | Install a compiler supporting C17 on macOS/Darwin or Linux. `CC` names one executable, such as `cc` or `/path/to/clang`; it is not a shell command or a flags list. |
-| Native helper build fails | Keep the compiler output and target OS/architecture. The fixed compiler flags include `-std=c17` and warnings-as-errors. Build source for the deployment target. |
-| `:native_helper_unavailable` | Verify the application was built normally and its installed `priv/native/arbor_rpc_subprocess` was included in the release. A source tar deliberately contains no prebuilt helper. |
+| Build warns that the native subprocess helper was not built | No C17 compiler was found, or it failed (the warning includes its output). Install one on macOS/Darwin or Linux, or set `CC` to one executable such as `cc` or `/path/to/clang` (not a shell command or a flags list), then run `mix deps.compile arbor_rpc --force`. If you never open subprocesses, set `ARBOR_RPC_NATIVE=skip` to silence it. |
+| Build fails with "required but was not built" | `ARBOR_RPC_NATIVE=required` or `config :arbor_rpc, native_helper: :required` is set and no working compiler was found. Keep the compiler output and target OS/architecture. Build source for the deployment target. |
+| `:native_helper_unavailable` | `Arbor.RPC.Subprocess.available?/0` returns `false`. Check the build log for the warning above, and verify the installed `priv/native/arbor_rpc_subprocess` (under `_build/<env>/lib/arbor_rpc/`) was included in the release. A source tar deliberately contains no prebuilt helper. |
 | `{:unsupported_subprocess_backend, platform}` | Native subprocess operations are supported only on the qualified macOS/Darwin and Linux targets. Windows has no native backend. |
 | `{:executable_not_found, name}` | Check the child's effective PATH, working directory and executable permission. An explicit child PATH overrides the VM PATH; an explicitly unset PATH has no host fallback. |
 | `{:invalid_cd, value}` or `:invalid_command` | `cd` must name an existing directory. Pass a nonempty list of binary argv elements without NUL bytes, beginning with the executable. |

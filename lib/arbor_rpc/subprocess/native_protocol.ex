@@ -1,6 +1,6 @@
 defmodule Arbor.RPC.Subprocess.NativeProtocol do
   @moduledoc false
-  @version 1
+  @version 2
 
   @type event ::
           {:started, non_neg_integer(), pos_integer(), non_neg_integer(), boolean(),
@@ -56,7 +56,9 @@ defmodule Arbor.RPC.Subprocess.NativeProtocol do
   def command(:write, token, sequence, bytes),
     do: <<@version, ?I, token::64, sequence::64, bytes::binary>>
 
+  def command(:close_input, token, 0, <<>>), do: <<@version, ?F, token::64>>
   def command(:close, token, 0, <<>>), do: <<@version, ?C, token::64>>
+  def command(:close_now, token, 0, <<>>), do: <<@version, ?X, token::64>>
   def command(:quit, token, 0, <<>>), do: <<@version, ?Q, token::64>>
   def command(:heartbeat, token, 0, <<>>), do: <<@version, ?H, token::64>>
 

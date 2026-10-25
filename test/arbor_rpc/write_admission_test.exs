@@ -347,7 +347,7 @@ defmodule Arbor.RPC.Subprocess.WriteAdmissionTest do
     parent = self()
 
     debug = fn
-      :armed, {:in, {_port, {:data, <<1, ?W, _packet::binary>>}}}, _name ->
+      :armed, {:in, {_port, {:data, <<2, ?W, _packet::binary>>}}}, _name ->
         send(parent, {:actual_write_ack_held, self()})
 
         receive do

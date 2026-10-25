@@ -10,7 +10,11 @@ defmodule Arbor.RPC.Subprocess.Guardian do
     )
   end
 
-  def close(pid, generation, timeout), do: call(pid, generation, :close, timeout)
+  # `:prompt` skips the EOF grace for a stream that already failed.
+  def close(pid, generation, timeout, mode \\ :graceful),
+    do: call(pid, generation, {:close, mode}, timeout)
+
+  def close_input(pid, generation, timeout), do: call(pid, generation, :close_input, timeout)
   def proof(pid, generation), do: call(pid, generation, :proof, 500)
   def receipt(pid, generation, timeout), do: call(pid, generation, :receipt, timeout)
 
@@ -65,6 +69,7 @@ defmodule Arbor.RPC.Subprocess.Guardian do
          sequence: 0,
          write_sequence: 0,
          write: nil,
+         input_closed: false,
          receipt: nil,
          close_waiters: [],
          closing: false,
@@ -137,7 +142,7 @@ defmodule Arbor.RPC.Subprocess.Guardian do
 
   def handle_call({_generation, :proof}, _from, state), do: {:reply, {:ok, state.proof}, state}
 
-  def handle_call({_generation, :close}, from, state) do
+  def handle_call({_generation, {:close, mode}}, from, state) when mode in [:graceful, :prompt] do
     state = %{state | explicit: true}
 
     if state.receipt do
@@ -147,8 +152,29 @@ defmodule Arbor.RPC.Subprocess.Guardian do
       if length(state.close_waiters) >= state.limits.max_waiters do
         {:reply, {:error, :waiter_limit}, state}
       else
-        {:noreply, begin_cleanup(%{state | close_waiters: [from | state.close_waiters]})}
+        state = %{state | close_waiters: [from | state.close_waiters]}
+        {:noreply, begin_cleanup(state, mode)}
       end
+    end
+  end
+
+  def handle_call({_generation, :close_input}, {caller, _tag}, state) do
+    cond do
+      caller != state.actor ->
+        {:reply, {:error, :invalid_write_owner}, state}
+
+      state.input_closed ->
+        {:reply, :ok, state}
+
+      state.closing or state.write != nil or state.vendor_status != nil ->
+        {:reply, {:error, :closed}, state}
+
+      true ->
+        # The helper closes child stdin once admitted bytes drain.
+        case command(state, :close_input) do
+          :ok -> {:reply, :ok, %{state | input_closed: true}}
+          error -> {:reply, error, state}
+        end
     end
   end
 
@@ -157,7 +183,7 @@ defmodule Arbor.RPC.Subprocess.Guardian do
       caller != state.actor ->
         {:reply, {:error, :invalid_write_owner}, state}
 
-      state.closing or state.write != nil or state.vendor_status != nil ->
+      state.closing or state.input_closed or state.write != nil or state.vendor_status != nil ->
         WriteAdmission.complete(context, {:error, :closed})
         {:reply, {:error, :closed}, state}
 
@@ -248,7 +274,7 @@ defmodule Arbor.RPC.Subprocess.Guardian do
   def handle_info({:write_timeout, sequence}, %{write: {sequence, from, _timer, context}} = state) do
     WriteAdmission.uncertain(context, {:error, :write_admission_timeout})
     GenServer.reply(from, {:uncertain, {:error, :write_admission_timeout}})
-    {:noreply, begin_cleanup(%{state | write: nil})}
+    {:noreply, begin_cleanup(%{state | write: nil}, :prompt)}
   end
 
   def handle_info(:cleanup_timeout, %{receipt: nil} = state),
@@ -318,12 +344,22 @@ defmodule Arbor.RPC.Subprocess.Guardian do
 
   defp event(_invalid_or_duplicate, state), do: fail(state, :invalid_helper_event)
 
-  defp begin_cleanup(%{closing: true} = state), do: state
+  defp begin_cleanup(state, mode \\ :graceful)
 
-  defp begin_cleanup(state) do
+  # A prompt request still cuts short an orderly cleanup's EOF grace.
+  defp begin_cleanup(%{closing: true} = state, :prompt) when is_nil(state.receipt) do
+    case command(state, :close_now) do
+      :ok -> state
+      {:error, reason} -> fail(state, reason)
+    end
+  end
+
+  defp begin_cleanup(%{closing: true} = state, _mode), do: state
+
+  defp begin_cleanup(state, mode) do
     Process.send_after(self(), :cleanup_timeout, state.limits.cleanup_timeout + 100)
 
-    case command(state, :close) do
+    case command(state, if(mode == :prompt, do: :close_now, else: :close)) do
       :ok -> %{state | closing: true}
       {:error, reason} -> fail(%{state | closing: true}, reason)
     end

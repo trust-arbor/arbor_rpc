@@ -15,6 +15,7 @@ defmodule Arbor.RPC.Subprocess.Actor do
     max_pending_writes: 64,
     max_pending_write_bytes: 4_194_304,
     cleanup_timeout: 500,
+    eof_grace: 250,
     term_grace: 100,
     closed_retention: 5000,
     receipt_retention: 5000,
@@ -80,12 +81,23 @@ defmodule Arbor.RPC.Subprocess.Actor do
       {:error, {:invalid_limit, elem(invalid, 0)}}
     else
       limits = Map.new(@defaults, fn {key, default} -> {key, Keyword.get(opts, key, default)} end)
+      limits = fit_eof_grace(limits, Keyword.has_key?(opts, :eof_grace))
 
-      if limits.cleanup_timeout >= limits.term_grace + 50,
+      if limits.cleanup_timeout >= limits.eof_grace + limits.term_grace + 50,
         do: {:ok, limits},
         else: {:error, :invalid_cleanup_budget}
     end
   end
+
+  # An implicit EOF grace shrinks to fit budgets chosen before it existed.
+  defp fit_eof_grace(limits, true), do: limits
+
+  defp fit_eof_grace(limits, false) do
+    room = max(0, limits.cleanup_timeout - limits.term_grace - 50)
+    %{limits | eof_grace: min(limits.eof_grace, room)}
+  end
+
+  defp valid_limit?(:eof_grace, value), do: is_integer(value) and value in 0..60_000
 
   defp valid_limit?(key, value)
        when key in [
@@ -143,6 +155,26 @@ defmodule Arbor.RPC.Subprocess.Actor do
     {:stop, :normal, state.cleanup_result, state}
   end
 
+  def handle_call({_generation, :close_input}, _from, %{closed: closed} = state)
+      when closed != nil,
+      do: {:reply, {:error, :closed}, state}
+
+  def handle_call({_generation, :close_input}, _from, state) do
+    # Published writes drain first, within one drain budget. Sealing only after
+    # the Guardian accepts keeps writes open if it refuses (e.g. backpressure);
+    # the Guardian itself rejects any write after a successful close_input.
+    drain_writes(state)
+    result = Guardian.close_input(state.guardian, state.generation, 1100)
+    if result == :ok, do: WriteAdmission.seal(state.writes)
+
+    state =
+      if result == {:error, :helper_closed},
+        do: close(state, :helper_closed, :failure),
+        else: state
+
+    reply(result, state)
+  end
+
   def handle_call({_generation, {:write, _data}}, _from, %{closed: closed} = state)
       when closed != nil do
     {:reply, {:error, :closed}, state}
@@ -154,7 +186,11 @@ defmodule Arbor.RPC.Subprocess.Actor do
         Guardian.write(state.guardian, state.generation, data, 1100)
       end
 
-    state = if result == {:error, :helper_closed}, do: close(state, :helper_closed), else: state
+    state =
+      if result == {:error, :helper_closed},
+        do: close(state, :helper_closed, :failure),
+        else: state
+
     reply(result, state)
   end
 
@@ -281,10 +317,10 @@ defmodule Arbor.RPC.Subprocess.Actor do
         noreply(%{state | decoder: decoder})
 
       {:error, reason, state, decoder} ->
-        noreply(%{state | decoder: decoder} |> close(reason))
+        noreply(%{state | decoder: decoder} |> close(reason, :failure))
 
       {:error, reason} ->
-        noreply(close(state, reason))
+        noreply(close(state, reason, :failure))
     end
   end
 
@@ -476,9 +512,12 @@ defmodule Arbor.RPC.Subprocess.Actor do
   defp close(state, reason, kind \\ :requested)
   defp close(%{closed: closed} = state, _reason, _kind) when closed != nil, do: state
 
-  defp close(state, reason, _kind) do
+  defp close(state, reason, kind) do
     WriteAdmission.seal(state.writes)
-    result = Guardian.close(state.guardian, state.generation, state.limits.cleanup_timeout + 200)
+    # A failed stream is not an orderly shutdown: report it without the EOF grace.
+    mode = if kind == :failure, do: :prompt, else: :graceful
+    timeout = state.limits.cleanup_timeout + 200
+    result = Guardian.close(state.guardian, state.generation, timeout, mode)
     reason = if result == :ok, do: reason, else: {:cleanup_failed, reason, result}
     Process.send_after(self(), :closed_timeout, state.limits.closed_retention)
     %{state | closed: reason, cleanup_result: result}

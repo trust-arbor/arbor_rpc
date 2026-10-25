@@ -15,15 +15,27 @@ defmodule Arbor.RPC.Subprocess.NativeBackend do
     end
   end
 
-  @impl true
-  def open(command, opts, limits) do
+  @doc false
+  def available do
     with {:unix, platform} when platform in [:darwin, :linux] <- :os.type(),
          {:ok, executable} <- helper_path(),
          true <- File.regular?(executable) do
+      {:ok, executable}
+    else
+      false -> {:error, :native_helper_unavailable}
+      {:error, _reason} = error -> error
+      platform -> {:error, {:unsupported_subprocess_backend, platform}}
+    end
+  end
+
+  @impl true
+  def open(command, opts, limits) do
+    with {:ok, executable} <- available() do
       args = [
-        "1",
+        "2",
         bool(opts, :process_group),
         bool(opts, :stderr_to_stdout),
+        Integer.to_string(limits.eof_grace),
         Integer.to_string(limits.term_grace),
         Integer.to_string(limits.cleanup_timeout),
         "5000",
@@ -50,10 +62,6 @@ defmodule Arbor.RPC.Subprocess.NativeBackend do
         ])
 
       {:ok, port}
-    else
-      false -> {:error, :native_helper_unavailable}
-      {:error, _reason} = error -> error
-      platform -> {:error, {:unsupported_subprocess_backend, platform}}
     end
   catch
     :error, reason -> {:error, {:native_helper_open_failed, reason}}

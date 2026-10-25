@@ -20,6 +20,7 @@ defmodule ArchiveConsumer do
 
     priv = :arbor_rpc |> :code.priv_dir() |> List.to_string()
     true = File.regular?(Path.join(priv, "native/arbor_rpc_subprocess"))
+    true = Arbor.RPC.Subprocess.available?()
 
     {:ok, "installed-final\r\nlast", 7} =
       Arbor.RPC.Subprocess.capture([
@@ -35,6 +36,12 @@ defmodule ArchiveConsumer do
       Arbor.RPC.Subprocess.cleanup_receipt(child)
 
     :ok = Arbor.RPC.Subprocess.close(child)
+
+    # Close sends EOF before any signal: a child that exits on EOF reports 0.
+    {:ok, cat} = Arbor.RPC.Subprocess.open(["/bin/cat"])
+    :ok = Arbor.RPC.Subprocess.close(cat)
+    {:ok, %{direct_child: :reaped, vendor_status: 0}} = Arbor.RPC.Subprocess.cleanup_receipt(cat)
+
     apps = Application.started_applications() |> Enum.map(&elem(&1, 0))
     true = Enum.all?([:arbor_rpc], &(&1 in apps))
 
@@ -43,6 +50,24 @@ defmodule ArchiveConsumer do
     IO.puts(
       "Archive apps, installed helper, exact bytes/status and retained cleanup receipt pass"
     )
+  end
+
+  # Run in a consumer compiled without a C compiler: installation succeeds,
+  # framing and JSON-RPC work, and subprocess operations report the gap.
+  def probe_without_helper do
+    {:ok, _} = Application.ensure_all_started(:archive_consumer)
+    false = Arbor.RPC.Subprocess.available?()
+
+    {:error, :native_helper_unavailable} =
+      Arbor.RPC.Subprocess.open(["/bin/sh", "-c", "exit 0"])
+
+    {:error, :native_helper_unavailable} =
+      Arbor.RPC.Subprocess.capture(["/bin/sh", "-c", "exit 0"])
+
+    %{"jsonrpc" => "2.0", "method" => "ping"} = Arbor.RPC.JSONRPC.request("ping", %{}, 1)
+    {:ok, ["frame"], _framing} = Arbor.RPC.Framing.push(Arbor.RPC.Framing.new(), "frame\n")
+
+    IO.puts("Compiler-free install reports the missing helper; framing and JSON-RPC pass")
   end
 
   defp record_installation do

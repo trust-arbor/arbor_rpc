@@ -14,8 +14,10 @@ Version `1.0.0-rc.2` is published. Add a normal Hex dependency:
 
 Run `mix deps.get`. A local `path:` dependency is optional for source development.
 
-Use Elixir 1.17 or newer with a compatible OTP release. Source installation on
-macOS/Darwin or Linux requires a C17 compiler. The native examples also need
+Use Elixir 1.17 or newer with a compatible OTP release. The subprocess examples
+need the native helper, which source installation on macOS/Darwin or Linux
+builds when a C17 compiler is available (check `Arbor.RPC.Subprocess.available?/0`).
+They also need
 the ordinary `printf` and `cat` executables on your PATH. They use literal argv;
 ArborRPC does not interpret shell command strings. Windows native subprocess
 operations are unsupported.
@@ -121,9 +123,8 @@ decoder = Framing.new(max_frame_bytes: 16)
 The per-frame byte bound excludes LF and applies across chunk boundaries.
 Returned frames preserve CR, UTF-8 BOMs and other original bytes. The caller
 decides whether to accept blank lines/BOMs, decodes JSON and bounds the total
-delivery queue. Framing and JSON-RPC helpers start no native process, although
-installing the source package still builds the helper on supported native
-platforms.
+delivery queue. Framing and JSON-RPC helpers start no native process and work
+without the helper.
 
 ## Continue
 

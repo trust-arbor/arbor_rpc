@@ -29,9 +29,12 @@ installation, candidate availability and complete examples.
   Handles, readers and subscribers stay on the child's BEAM node.
 - The default child environment is isolated. Supply needed variables explicitly;
   `false` unsets a variable. Environment inheritance is an explicit policy choice.
-- Source installation on macOS/Linux requires a C17 compiler, including framing
-  consumers. `CC` selects the compiler executable. Assembled releases include
-  the built helper and need no runtime compiler. Windows native subprocess
+- Source installation on macOS/Linux builds the native helper when a C17
+  compiler is available; without one it warns, and subprocess operations return
+  `{:error, :native_helper_unavailable}`. Check `Arbor.RPC.Subprocess.available?/0`
+  and set `ARBOR_RPC_NATIVE=required` when subprocesses are mandatory. `CC`
+  selects the compiler executable. Assembled releases include the built helper
+  and need no runtime compiler. Windows native subprocess
   operations are unsupported; consult the README for qualified platforms.
 
 ## Bound reads, writes and output
@@ -59,6 +62,9 @@ installation, candidate availability and complete examples.
 ## Retain cleanup evidence and operational errors
 
 - Close owned children with `Arbor.RPC.Subprocess.close/1` and handle the result.
+  Close sends stdin EOF first and signals only a child that outlives
+  `:eof_grace`; size `:cleanup_timeout` to cover `eof_grace + term_grace + 50`.
+  Use `Arbor.RPC.Subprocess.close_input/1` to send EOF and keep reading output.
   Process DOWN alone does not prove OS cleanup or targeted-group absence.
 - Read `Arbor.RPC.Subprocess.cleanup_receipt/1` promptly after close and use
   `Arbor.RPC.Subprocess.Receipt.result/1` to interpret it. Receipt retention is
