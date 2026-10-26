@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `JSONRPC.parse_unvalidated/1` accepts a request or notification that leaves
+  out `params`, as JSON-RPC 2.0 allows, with empty params. It used to return
+  `{:error, :invalid_message}`, so a peer's `ping` or list-change notification
+  sent without params was dropped. A response that also names a method stays a
+  response.
 - **Behavior change:** `Subprocess.close/1` closes the child's stdin first and
   sends TERM only if the child outlives the new `:eof_grace` option (default
   250 ms), then KILL after `:term_grace`. This follows the MCP stdio shutdown

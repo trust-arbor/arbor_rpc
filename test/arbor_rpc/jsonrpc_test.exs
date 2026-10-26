@@ -46,4 +46,15 @@ defmodule Arbor.RPC.JSONRPCTest do
 
     assert JSONRPC.parse_unvalidated(%{"method" => "ping"}) == {:error, :invalid_message}
   end
+
+  test "a request or notification may leave out params" do
+    assert JSONRPC.parse_unvalidated(~s({"jsonrpc":"2.0","method":"ping","id":"p1"})) ==
+             {:request, "ping", %{}, "p1"}
+
+    assert JSONRPC.parse_unvalidated(~s({"jsonrpc":"2.0","method":"tools/list_changed"})) ==
+             {:notification, "tools/list_changed", %{}}
+
+    assert JSONRPC.parse_unvalidated(~s({"jsonrpc":"2.0","id":4,"method":"ping","result":{}})) ==
+             {:result, %{}, 4}
+  end
 end
