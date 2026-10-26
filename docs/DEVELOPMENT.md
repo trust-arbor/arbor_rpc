@@ -84,9 +84,9 @@ publishable manifest with local dependency overrides unset:
 mkdir archive-consumer-input
 MIX_ENV=prod mix deps.get --only prod
 MIX_ENV=prod mix hex.build \
-  --output archive-consumer-input/arbor_rpc-1.0.0-rc.2.tar
+  --output archive-consumer-input/arbor_rpc-1.0.0-rc.3.tar
 python3 scripts/check_archive_consumer.py archive-consumer-input \
-  --expected-version 1.0.0-rc.2 \
+  --expected-version 1.0.0-rc.3 \
   --report _verification/rpc-archive-consumer.json
 ```
 
@@ -114,7 +114,7 @@ RC, publish RPC before the dependent protocol packages. Version/tag/archive
 identity and actual registry installation must agree; archive checks perform
 no publication or tagging.
 
-RC2 is published and tagged as `v1.0.0-rc.2`. Stable qualification, including the
+RC3 is published and tagged as `v1.0.0-rc.3`. Stable qualification, including the
 accepted continuous 48-hour gate, remains incomplete and no soak is active.
 Keep that status separate from successful local tests, short rehearsals and
 CI runs. Public defaults and finite resource/cleanup guarantees remain part of
