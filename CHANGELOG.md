@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.0.0-rc.3 — 2026-10-26
+
 - `JSONRPC.parse_unvalidated/1` accepts a request or notification that leaves
   out `params`, as JSON-RPC 2.0 allows, with empty params. It used to return
   `{:error, :invalid_message}`, so a peer's `ping` or list-change notification

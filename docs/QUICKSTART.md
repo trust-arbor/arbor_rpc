@@ -6,10 +6,10 @@ application, ArborMCP or ArborACP.
 
 ## Install the candidate
 
-Version `1.0.0-rc.2` is published. Add a normal Hex dependency:
+Version `1.0.0-rc.3` is published. Add a normal Hex dependency:
 
 ```elixir
-{:arbor_rpc, "== 1.0.0-rc.2"}
+{:arbor_rpc, "== 1.0.0-rc.3"}
 ```
 
 Run `mix deps.get`. A local `path:` dependency is optional for source development.
