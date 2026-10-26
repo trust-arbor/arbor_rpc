@@ -87,6 +87,18 @@ defmodule Arbor.RPC.JSONRPC do
     {:notification, method, params}
   end
 
+  # JSON-RPC 2.0 lets a request or notification leave out params ("This
+  # member MAY be omitted"); it parses with empty params. A response that also
+  # names a method stays a response.
+  def parse_unvalidated(%{"jsonrpc" => @jsonrpc, "method" => method} = message)
+      when not is_map_key(message, "params") and not is_map_key(message, "result") and
+             not is_map_key(message, "error") do
+    case Map.fetch(message, "id") do
+      {:ok, id} -> {:request, method, %{}, id}
+      :error -> {:notification, method, %{}}
+    end
+  end
+
   def parse_unvalidated(%{"jsonrpc" => @jsonrpc, "result" => result, "id" => id}) do
     {:result, result, id}
   end
