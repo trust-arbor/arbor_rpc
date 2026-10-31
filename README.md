@@ -9,7 +9,7 @@ MCP consume it as an independent dependency. The extraction preserved 18 RPC
 commits; `SOURCE_SNAPSHOT` records its ACP source revision and identical initial
 subtree. Repository integration changes do not replace that source lineage.
 
-Version `1.0.0-rc.3` is published for downstream migration testing, with a
+Version `1.0.0-rc.4` is the release candidate for downstream migration testing, with a
 source-built native subprocess backend. The original `2.0.0-rc.1` is retired;
 its archive and tag remain available. Stable promotion requires the remaining
 qualification and continuous 48-hour soak. See the
@@ -46,7 +46,7 @@ Install the published RC with a reproducible Hex dependency:
 
 ```elixir
 defp deps do
-  [{:arbor_rpc, "== 1.0.0-rc.3"}]
+  [{:arbor_rpc, "== 1.0.0-rc.4"}]
 end
 ```
 
@@ -268,7 +268,7 @@ MIX_ENV=dev mix docs --warnings-as-errors
 ExDoc is a dev-only dependency and does not run in consumer applications. Source
 links use `v<version>` in `trust-arbor/arbor_rpc`, with repository-root source
 paths.
-The published candidate uses the owning `v1.0.0-rc.3` tag. New versions require
+The published candidate uses the owning `v1.0.0-rc.4` tag. New versions require
 their own reviewed source and fresh tag.
 
 
@@ -288,7 +288,7 @@ MIX_ENV=test mix deps.compile
 mix test --warnings-as-errors --no-deps-check
 elixir scripts/check_boundaries.exs
 mix hex.build
-python3 scripts/check_archive_consumer.py . --expected-version 1.0.0-rc.3
+python3 scripts/check_archive_consumer.py . --expected-version 1.0.0-rc.4
 ```
 
 The archive check unpacks exactly one RPC source archive into a fresh consumer,
