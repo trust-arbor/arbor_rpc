@@ -1,5 +1,9 @@
 # Troubleshooting ArborRPC
 
+Versioned installation examples and source links below apply after the matching
+Hex release and Git tag are published. During release preparation, use the current
+published candidate or a local source checkout.
+
 Retain the complete tagged error and the selected source/package version.
 Subprocess exit status, frame delivery, helper status and cleanup confirmation
 are separate observations. The [quickstart](QUICKSTART.md) shows where to read
@@ -10,7 +14,7 @@ explains their limits.
 
 | Symptom | Check |
 |---|---|
-| Hex cannot resolve `1.0.0-rc.3` | Use the explicit `1.0.0-rc.3` prerelease requirement; a stable-only constraint does not select it. Check the lockfile and Hex connectivity. The original 2.0.0-rc.1 is retired. |
+| Hex cannot resolve `1.0.0-rc.4` | Use the explicit `1.0.0-rc.4` prerelease requirement; a stable-only constraint does not select it. Check the lockfile and Hex connectivity. The original 2.0.0-rc.1 is retired. |
 | Build warns that the native subprocess helper was not built | No C17 compiler was found, or it failed (the warning includes its output). Install one on macOS/Darwin or Linux, or set `CC` to one executable such as `cc` or `/path/to/clang` (not a shell command or a flags list), then run `mix deps.compile arbor_rpc --force`. If you never open subprocesses, set `ARBOR_RPC_NATIVE=skip` to silence it. |
 | Build fails with "required but was not built" | `ARBOR_RPC_NATIVE=required` or `config :arbor_rpc, native_helper: :required` is set and no working compiler was found. Keep the compiler output and target OS/architecture. Build source for the deployment target. |
 | `:native_helper_unavailable` | `Arbor.RPC.Subprocess.available?/0` returns `false`. Check the build log for the warning above, and verify the installed `priv/native/arbor_rpc_subprocess` (under `_build/<env>/lib/arbor_rpc/`) was included in the release. A source tar deliberately contains no prebuilt helper. |

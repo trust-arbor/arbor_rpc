@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.0.0-rc.4 — 2026-10-31
+
+- Refresh the coordinated release candidate for ArborMCP 2.0.0-rc.7 and ArborACP/adapters 1.0.0-rc.5. JSON-RPC, framing, native subprocess behavior and dependencies are unchanged from 1.0.0-rc.3.
+- Update installation and source-archive examples for the new owning tag. Stable promotion still requires the remaining qualification and continuous 48-hour soak.
+
 ## 1.0.0-rc.3 — 2026-10-26
 
 - `JSONRPC.parse_unvalidated/1` accepts a request or notification that leaves
