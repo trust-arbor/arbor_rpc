@@ -1,5 +1,9 @@
 # Troubleshooting ArborRPC
 
+Versioned installation examples and source links below apply after the matching
+Hex release and Git tag are published. During release preparation, use the current
+published candidate or a local source checkout.
+
 Retain the complete tagged error and the selected source/package version.
 Subprocess exit status, frame delivery, helper status and cleanup confirmation
 are separate observations. The [quickstart](QUICKSTART.md) shows where to read

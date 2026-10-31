@@ -1,5 +1,9 @@
 # ArborRPC quickstart
 
+Versioned installation examples and source links below apply after the matching
+Hex release and Git tag are published. During release preparation, use the current
+published candidate or a local source checkout.
+
 ArborRPC is a low-level library for JSON-RPC envelopes, newline framing and
 owned subprocesses. Protocol sessions and method validation belong to your
 application, ArborMCP or ArborACP.

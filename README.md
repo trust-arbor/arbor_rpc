@@ -1,5 +1,9 @@
 # ArborRPC
 
+Versioned installation examples and source links below apply after the matching
+Hex release and Git tag are published. During release preparation, use the current
+published candidate or a local source checkout.
+
 ArborRPC provides shared JSON-RPC, framing and environment mechanics for ArborMCP
 and ArborACP. Its Hex package and OTP application are `arbor_rpc`, and its module
 namespace is `Arbor.RPC.*`.
@@ -268,7 +272,7 @@ MIX_ENV=dev mix docs --warnings-as-errors
 ExDoc is a dev-only dependency and does not run in consumer applications. Source
 links use `v<version>` in `trust-arbor/arbor_rpc`, with repository-root source
 paths.
-The published candidate uses the owning `v1.0.0-rc.4` tag. New versions require
+This candidate uses the prospective owning `v1.0.0-rc.4` tag. New versions require
 their own reviewed source and fresh tag.
 
 

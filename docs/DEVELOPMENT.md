@@ -1,5 +1,9 @@
 # Developing ArborRPC
 
+Versioned installation examples and source links below apply after the matching
+Hex release and Git tag are published. During release preparation, use the current
+published candidate or a local source checkout.
+
 Run these commands at the standalone RPC repository root. ACP and MCP consume
 RPC independently; their source checkouts are not required for RPC tests or
 documentation. `SOURCE_SNAPSHOT` records the original extraction and preserved
@@ -114,7 +118,7 @@ RC, publish RPC before the dependent protocol packages. Version/tag/archive
 identity and actual registry installation must agree; archive checks perform
 no publication or tagging.
 
-RC4 uses the owning `v1.0.0-rc.4` tag. Stable qualification, including the
+RC4 uses the prospective owning `v1.0.0-rc.4` tag. Stable qualification, including the
 accepted continuous 48-hour gate, remains incomplete and no soak is active.
 Keep that status separate from successful local tests, short rehearsals and
 CI runs. Public defaults and finite resource/cleanup guarantees remain part of
